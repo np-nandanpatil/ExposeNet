@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Geo-Track Monitor</title>
+    <style>
+        body {
+            width: 400px;
+            padding: 10px;
+            font-family: Arial, sans-serif;
+        }
+        .tab-buttons {
+            display: flex;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #ccc;
+        }
+        .tab-button {
+            padding: 10px 20px;
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-size: 14px;
+            color: #666;
+        }
+        .tab-button.active {
+            color: #2196F3;
+            border-bottom: 2px solid #2196F3;
+        }
+        .tab-content {
+            padding: 20px;
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .list-item {
+            padding: 10px;
+            margin: 5px 0;
+            border: 1px solid #eee;
+            border-radius: 4px;
+        }
+        .list-item.anomaly {
+            background-color: #ffebee;
+            border-color: #ffcdd2;
+        }
+        .status {
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 4px;
+            background-color: #f5f5f5;
+        }
+        .status.error {
+            background-color: #ffebee;
+            color: #c62828;
+        }
+        .status.success {
+            background-color: #e8f5e9;
+            color: #2e7d32;
+        }
+        .settings-group {
+            margin: 15px 0;
+        }
+        .settings-group label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        .button {
+            padding: 8px 16px;
+            background-color: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .button:hover {
+            background-color: #1976D2;
+        }
+        .button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .blockchain-item {
+            padding: 10px;
+            margin: 5px 0;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .blockchain-hash {
+            color: #666;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="tab-buttons">
+        <button class="tab-button active" data-tab="monitor">Monitor</button>
+        <button class="tab-button" data-tab="model">Model Status</button>
+        <button class="tab-button" data-tab="blockchain">Blockchain Log</button>
+        <button class="tab-button" data-tab="settings">Settings</button>
+    </div>
+
+    <div id="monitor" class="tab-content active">
+        <h2>Connection Monitor</h2>
+        <div id="geoDataList"></div>
+        <button id="addToBlockchain" class="button" style="display: none;">Add to Blockchain</button>
+    </div>
+
+    <div id="model" class="tab-content">
+        <h2>Model Status</h2>
+        <div id="modelStatus" class="status">Loading...</div>
+        <button id="trainModel" class="button">Train Model</button>
+    </div>
+
+    <div id="blockchain" class="tab-content">
+        <h2>Blockchain Log</h2>
+        <div id="blockchainList"></div>
+    </div>
+
+    <div id="settings" class="tab-content">
+        <h2>Settings</h2>
+        <div class="settings-group">
+            <label>
+                <input type="checkbox" id="anomalyDetection" checked>
+                Enable Anomaly Detection
+            </label>
+        </div>
+        <div class="settings-group">
+            <label>
+                <input type="checkbox" id="useMultipleAPIs" checked>
+                Use Multiple Geolocation APIs
+            </label>
+        </div>
+        <button id="saveSettings" class="button">Save Settings</button>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

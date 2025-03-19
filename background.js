@@ -1,291 +1,291 @@
-// Service worker for Geo-Track Browser Extension
-console.log('Service worker starting...');
+// background.js
 
-// Global state storage
-let tabGeoData = {};
-let geoDataCache = {};
-let anomalyDetectionEnabled = true;
-let multiApiEnabled = true;
+// Initialize model worker
+const modelWorker = new Worker('model-worker.js');
+let geoDataCache = new Map();
+let settings = {
+  anomalyDetection: true,
+  useMultipleAPIs: true
+};
 
-// Load stored state on startup
-chrome.storage.local.get(['tabGeoData', 'geoDataCache', 'anomalyDetectionEnabled', 'multiApiEnabled'], (result) => {
-  tabGeoData = result.tabGeoData || {};
-  geoDataCache = result.geoDataCache || {};
-  anomalyDetectionEnabled = result.anomalyDetectionEnabled !== undefined ? result.anomalyDetectionEnabled : true;
-  multiApiEnabled = result.multiApiEnabled !== undefined ? result.multiApiEnabled : true;
-  console.log('State loaded from storage:', Object.keys(tabGeoData).length, 'tabs');
+// Load settings on startup
+chrome.storage.local.get(['settings'], (result) => {
+  if (result.settings) {
+    settings = result.settings;
+  }
 });
 
-// Web request listener for IP tracking
+// Initialize blockchain with genesis block
+chrome.storage.local.get(['blockchain'], (result) => {
+  if (!result.blockchain || result.blockchain.length === 0) {
+    const genesisBlock = {
+      timestamp: Date.now(),
+      data: { type: 'genesis', message: 'Initial block' },
+      previousHash: '0',
+      hash: calculateHash({ type: 'genesis', message: 'Initial block' }, '0')
+    };
+    chrome.storage.local.set({ blockchain: [genesisBlock] });
+  }
+});
+
+// Geolocation APIs
+const GEO_APIS = [
+  {
+    url: (ip) => `http://ip-api.com/json/${ip}`,
+    parse: (data) => ({
+      city: data.city,
+      country: data.country,
+      success: data.status === 'success'
+    })
+  },
+  {
+    url: (ip) => `https://ipapi.co/${ip}/json/`,
+    parse: (data) => ({
+      city: data.city,
+      country: data.country_code,
+      success: true
+    })
+  }
+];
+
+// Web request listener
 chrome.webRequest.onCompleted.addListener(
   async (details) => {
-    console.log('Web request completed:', details.url);
-    if (details.tabId < 0) {
-      console.log('Skipping negative tabId:', details.tabId);
-      return;
-    }
-
-    const ip = details.ip;
-    if (!ip) {
-      console.log('No IP in details, skipping:', details.url);
-      return;
-    }
-
-    // Get domain from tab
-    const domain = await getDomainFromTab(details.tabId);
-    if (!domain) {
-      console.log('Could not determine domain for tabId:', details.tabId);
-      return;
-    }
-
-    // Fetch geolocation data
-    const geoInfo = await fetchGeoData(ip);
-    if (!geoInfo) {
-      console.log('Failed to fetch geo data for IP:', ip);
-      return;
-    }
-
-    // Check if this is a new connection for this tab/domain
-    if (shouldTrackConnection(details.tabId, ip)) {
-      // Send data to monitor for anomaly detection
-      await chrome.runtime.sendMessage({
-        action: 'checkAnomaly',
-        data: { ip, domain }
-      }).catch(e => console.log('Monitor not open, storing data without check'));
-
-      // Check blockchain for known bad IPs
-      let isAnomaly = false;
-      let reroutedTo = null;
-
-      try {
-        const blockchainData = await chrome.storage.local.get({ blockchain: [] });
-        const blockchain = blockchainData.blockchain || [];
-        isAnomaly = blockchain.some(block => 
-          typeof block.data === 'object' && 
-          block.data.ip === ip
-        );
-      } catch (e) {
-        console.error('Error checking blockchain:', e);
+    if (details.type === "main_frame") {
+      const ipAddress = extractIpAddress(details.ip);
+      if (ipAddress) {
+        await processConnection(ipAddress, details.tabId, details.url);
       }
-
-      // Update tab data with the connection info
-      updateTabData(details.tabId, ip, domain, geoInfo, isAnomaly, reroutedTo);
     }
   },
-  { urls: ["<all_urls>"] }
+  { urls: ["<all_urls>"] },
+  ["responseHeaders"]
 );
 
-// Message listener for communication with monitor.html
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === 'getTabData') {
-    // Send current tab data to the monitor
-    sendResponse({ tabGeoData });
-    return true;
-  } 
-  else if (message.action === 'anomalyDetected') {
-    // Update state with anomaly info from monitor
-    const { ip, domain, isAnomaly, reroutedTo } = message.data;
-    
-    // Update all affected tab entries
-    for (const tabId in tabGeoData) {
-      if (tabGeoData[tabId].domain === domain && 
-          tabGeoData[tabId].results && 
-          tabGeoData[tabId].results[ip]) {
-        
-        tabGeoData[tabId].results[ip].isAnomaly = isAnomaly;
-        if (reroutedTo) {
-          tabGeoData[tabId].results[ip].reroutedTo = reroutedTo;
-        }
-      }
-    }
-    
-    // Save updated state
-    chrome.storage.local.set({ tabGeoData });
-    sendResponse({ success: true });
-    return true;
-  }
-  else if (message.action === 'setSettings') {
-    // Update settings
-    if (message.data.anomalyDetectionEnabled !== undefined) {
-      anomalyDetectionEnabled = message.data.anomalyDetectionEnabled;
-    }
-    if (message.data.multiApiEnabled !== undefined) {
-      multiApiEnabled = message.data.multiApiEnabled;
-    }
-    
-    // Save to storage
-    chrome.storage.local.set({ 
-      anomalyDetectionEnabled, 
-      multiApiEnabled 
-    });
-    
-    sendResponse({ success: true });
-    return true;
-  }
-  else if (message.action === 'getSettings') {
-    // Return current settings
-    sendResponse({ 
-      anomalyDetectionEnabled, 
-      multiApiEnabled 
-    });
-    return true;
-  }
-});
-
-// Tab event listeners
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.url && tabGeoData[tabId]) {
-    try {
-      const domain = new URL(tab.url).hostname;
-      tabGeoData[tabId].domain = domain;
-      chrome.storage.local.set({ tabGeoData });
-    } catch (e) {
-      console.error('Error updating tab domain:', e);
-    }
-  }
-});
-
-chrome.tabs.onRemoved.addListener((tabId) => {
-  if (tabGeoData[tabId]) {
-    delete tabGeoData[tabId];
-    chrome.storage.local.set({ tabGeoData });
-  }
-});
-
-// Extension action opens the monitor
-chrome.action.onClicked.addListener(() => {
-  chrome.windows.create({
-    url: "monitor.html",
-    type: "popup",
-    width: 800,
-    height: 600
-  });
-});
-
-// Helper functions
-async function getDomainFromTab(tabId) {
+async function processConnection(ipAddress, tabId, url) {
   try {
-    const tab = await chrome.tabs.get(tabId);
-    if (tab.url) {
-      const url = new URL(tab.url);
-      return url.hostname;
+    // Check cache first
+    if (geoDataCache.has(ipAddress)) {
+      const cachedData = geoDataCache.get(ipAddress);
+      updateTabData(cachedData, tabId, url);
+      return;
     }
-  } catch (e) {
-    console.error('Error getting domain from tab:', e);
+
+    // Try multiple APIs if enabled
+    let geoData = null;
+    if (settings.useMultipleAPIs) {
+      for (const api of GEO_APIS) {
+        try {
+          const response = await fetch(api.url(ipAddress));
+          const data = await response.json();
+          geoData = api.parse(data);
+          if (geoData.success) break;
+        } catch (error) {
+          console.error(`API error: ${error.message}`);
+        }
+      }
+    } else {
+      // Use default API
+      const response = await fetch(GEO_APIS[0].url(ipAddress));
+      const data = await response.json();
+      geoData = GEO_APIS[0].parse(data);
+    }
+
+    if (geoData && geoData.success) {
+      // Cache the result
+      geoDataCache.set(ipAddress, geoData);
+
+      // Check for anomalies if enabled
+      if (settings.anomalyDetection) {
+        modelWorker.postMessage({
+          type: 'predict',
+          data: { ip: ipAddress }
+        });
+      }
+
+      updateTabData(geoData, tabId, url);
+    }
+  } catch (error) {
+    console.error('Error processing connection:', error);
   }
-  return null;
 }
 
-async function fetchGeoData(ip) {
-  // Return cached data if available
-  if (geoDataCache[ip]) {
-    return geoDataCache[ip];
-  }
-  
-  const apis = [
-    {
-      url: `http://ip-api.com/json/${ip}`,
-      process: (data) => {
-        if (data.status === "success") {
-          return {
-            city: data.city || 'Unknown',
-            country: data.country || 'Unknown',
-            query: ip,
-            source: 'ip-api.com'
-          };
-        }
-        return null;
-      }
-    }
-  ];
-  
-  // Add a second API if multi-API is enabled
-  if (multiApiEnabled) {
-    apis.push({
-      url: `https://ipapi.co/${ip}/json/`,
-      process: (data) => {
-        if (data && !data.error) {
-          return {
-            city: data.city || 'Unknown',
-            country: data.country_name || 'Unknown',
-            query: ip,
-            source: 'ipapi.co'
-          };
-        }
-        return null;
-      }
-    });
-  }
-  
-  // Try each API in sequence with retry logic
-  for (const api of apis) {
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        const response = await fetch(api.url);
-        const data = await response.json();
-        const result = api.process(data);
-        
-        if (result) {
-          // Cache the result
-          geoDataCache[ip] = result;
-          
-          // Save cache periodically (don't await)
-          chrome.storage.local.set({ geoDataCache });
-          
-          return result;
-        }
-      } catch (error) {
-        console.error(`Error fetching geo data from ${api.url} (attempt ${attempt}):`, error);
-      }
-      
-      // Wait before retrying
-      if (attempt < 2) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-    }
-  }
-  
-  // If all APIs fail, return a basic result
-  const fallbackResult = {
-    city: 'Unknown',
-    country: 'Unknown',
-    query: ip,
-    source: 'fallback'
+function updateTabData(geoData, tabId, url) {
+  const domain = new URL(url).hostname;
+  const data = {
+    ip: ipAddress,
+    city: geoData.city,
+    country: geoData.country,
+    timestamp: Date.now(),
+    tabId: tabId,
+    domain: domain,
+    anomaly: false // Will be updated by model worker if anomaly detection is enabled
   };
-  
-  // Cache the fallback result
-  geoDataCache[ip] = fallbackResult;
-  return fallbackResult;
+
+  storeGeoData(data);
+  sendGeoDataToPopup(data);
 }
 
-function shouldTrackConnection(tabId, ip) {
-  // Check if we've already tracked this IP for this tab
-  return !tabGeoData[tabId] || 
-         !tabGeoData[tabId].results || 
-         !tabGeoData[tabId].results[ip];
+function extractIpAddress(ip) {
+  if (!ip) return null;
+  // Handle both IPv4 and IPv6
+  return ip.includes(':') ? ip : null; // Currently only handling IPv6
 }
 
-function updateTabData(tabId, ip, domain, geoInfo, isAnomaly, reroutedTo) {
-  // Initialize tab data if needed
-  if (!tabGeoData[tabId]) {
-    tabGeoData[tabId] = {
-      domain: domain,
-      results: {}
-    };
+function calculateHash(data, previousHash) {
+  const str = JSON.stringify(data) + previousHash;
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
   }
-  
-  // Add the IP data
-  tabGeoData[tabId].results[ip] = {
-    ...geoInfo,
-    isAnomaly: isAnomaly,
-    reroutedTo: reroutedTo,
-    timestamp: Date.now()
-  };
-  
-  // Save to storage
-  chrome.storage.local.set({ tabGeoData }, () => {
-    console.log('Updated tabGeoData for tabId:', tabId);
+  return hash.toString(36);
+}
+
+function storeGeoData(geoData) {
+  chrome.storage.local.get({ geoData: [] }, (result) => {
+    const storedGeoData = result.geoData;
+    storedGeoData.push(geoData);
+    chrome.storage.local.set({ geoData: storedGeoData });
   });
 }
 
-console.log('Service worker setup complete');
+function sendGeoDataToPopup(geoData) {
+  chrome.windows.getAll({ populate: true }, (windows) => {
+    let popupWindow = windows.find(
+      (win) => win.tabs.some((tab) => tab.url && tab.url.includes("popup.html"))
+    );
+
+    if (popupWindow) {
+      chrome.tabs.query(
+        { windowId: popupWindow.id, url: "*://*/popup.html" },
+        (tabs) => {
+          if (tabs && tabs.length > 0) {
+            chrome.tabs.sendMessage(tabs[0].id, {
+              action: "geoDataUpdate",
+              data: geoData,
+            });
+          }
+        }
+      );
+    }
+  });
+}
+
+// Handle messages from popup
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  switch (request.action) {
+    case 'trainModel':
+      modelWorker.postMessage({ type: 'train' });
+      break;
+    case 'updateSettings':
+      settings = request.settings;
+      chrome.storage.local.set({ settings });
+      break;
+    case 'addToBlockchain':
+      addBlockToBlockchain(request.data);
+      break;
+  }
+});
+
+// Handle messages from model worker
+modelWorker.onmessage = (event) => {
+  const { type, data } = event.data;
+
+  switch (type) {
+    case 'prediction':
+      if (data.isAnomaly) {
+        addBlockToBlockchain({
+          ip: data.ip,
+          prediction: data.prediction,
+          timestamp: Date.now()
+        });
+      }
+      break;
+    case 'trainingProgress':
+      sendModelStatusToPopup(`Training: Epoch ${data.epoch}`);
+      break;
+    case 'modelTrained':
+      sendModelStatusToPopup('Model trained successfully!');
+      break;
+    case 'modelLoadError':
+      sendModelStatusToPopup(`Error loading model: ${data.error}`);
+      break;
+  }
+};
+
+function addBlockToBlockchain(data) {
+  chrome.storage.local.get({ blockchain: [] }, (result) => {
+    const blockchain = result.blockchain;
+    const previousBlock = blockchain[blockchain.length - 1];
+    const previousHash = previousBlock ? previousBlock.hash : '0';
+    const newBlock = {
+      timestamp: Date.now(),
+      data: data,
+      previousHash: previousHash,
+      hash: calculateHash(data, previousHash)
+    };
+    blockchain.push(newBlock);
+    chrome.storage.local.set({ blockchain: blockchain });
+    sendBlockchainToPopup(blockchain);
+  });
+}
+
+function sendBlockchainToPopup(blockchain) {
+  chrome.windows.getAll({ populate: true }, (windows) => {
+    let popupWindow = windows.find(
+      (win) => win.tabs.some((tab) => tab.url && tab.url.includes("popup.html"))
+    );
+
+    if (popupWindow) {
+      chrome.tabs.query(
+        { windowId: popupWindow.id, url: "*://*/popup.html" },
+        (tabs) => {
+          if (tabs && tabs.length > 0) {
+            chrome.tabs.sendMessage(tabs[0].id, {
+              action: "blockchainUpdate",
+              data: blockchain,
+            });
+          }
+        }
+      );
+    }
+  });
+}
+
+function sendModelStatusToPopup(status) {
+  chrome.windows.getAll({ populate: true }, (windows) => {
+    let popupWindow = windows.find(
+      (win) => win.tabs.some((tab) => tab.url && tab.url.includes("popup.html"))
+    );
+
+    if (popupWindow) {
+      chrome.tabs.query(
+        { windowId: popupWindow.id, url: "*://*/popup.html" },
+        (tabs) => {
+          if (tabs && tabs.length > 0) {
+            chrome.tabs.sendMessage(tabs[0].id, {
+              action: "modelStatusUpdate",
+              data: status,
+            });
+          }
+        }
+      );
+    }
+  });
+}
+
+chrome.action.onClicked.addListener((tab) => {
+  openPopupWindow();
+});
+
+chrome.commands.onCommand.addListener((command) => {
+  if (command === "_execute_action") {
+    openPopupWindow();
+  }
+});
+
+function openPopupWindow() {
+  chrome.windows.create({ url: "popup.html", type: "normal" });
+}

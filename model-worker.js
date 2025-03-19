@@ -1,119 +1,110 @@
-importScripts('libs/tf.min.js');
+// model-worker.js
+importScripts('tf.min.js');
 
+let model = null;
 const ANOMALY_THRESHOLD = 0.5;
 
-const Model = {
-    model: null,
-    trained: false,
+// Load training data
+async function loadTrainingData() {
+  const response = await fetch('dataset.json');
+  const data = await response.json();
+  return data;
+}
 
-    ipToFeatures(ip) {
-        if (!this.isValidIP(ip)) {
-            console.warn(`Invalid IP address: ${ip}`);
-            return new Array(16).fill(0);
-        }
+// Preprocess IP addresses
+function preprocessIP(ip) {
+  // Convert IPv6 to array of numbers
+  const parts = ip.split(':');
+  return parts.map(part => parseInt(part, 16));
+}
 
-        const parts = ip.split(':').map(part => parseInt(part || '0', 16));
-        const validParts = parts.map(part => isNaN(part) ? 0 : part);
-        const paddedParts = validParts.concat(new Array(8 - validParts.length).fill(0));
-        const slicedParts = paddedParts.slice(0, 8);
-        const normalizedParts = slicedParts.map(part => part / 65535);
-        const features = normalizedParts;
-        return features;
-    },
+// Create and train model
+async function trainModel() {
+  const data = await loadTrainingData();
+  
+  // Create model
+  model = tf.sequential({
+    layers: [
+      tf.layers.dense({ inputShape: [8], units: 16, activation: 'relu' }),
+      tf.layers.dense({ units: 8, activation: 'relu' }),
+      tf.layers.dense({ units: 1, activation: 'sigmoid' })
+    ]
+  });
 
-    isValidIP(ip) {
-        const ipv4Pattern = /^(\d{1,3}\.){3}\d{1,3}$/;
-        const ipv6Pattern = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$/;
-        return ipv4Pattern.test(ip) || ipv6Pattern.test(ip);
-      },
+  // Compile model
+  model.compile({
+    optimizer: tf.train.adam(0.001),
+    loss: 'binaryCrossentropy',
+    metrics: ['accuracy']
+  });
 
-    async loadDataset() {
-        console.log('Loading dataset...');
-        try {
-        const response = await fetch('dataset.json');
-        if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
-        const data = await response.json();
-        console.log('Dataset loaded:', data.length, 'entries');
-        return data;
-        } catch (e) {
-        console.error('Failed to load dataset:', e);
-        return [];
-        }
-    },
+  // Prepare training data
+  const xs = tf.tensor2d(data.map(item => preprocessIP(item.ip)));
+  const ys = tf.tensor2d(data.map(item => item.label), [data.length, 1]);
 
-    async trainModel() {
-        console.log('Training model...');
-        const dataset = await this.loadDataset();
-        if (dataset.length === 0) {
-        console.error('Empty dataset, skipping training');
-        return;
-        }
-
-        try {
-        const xs = tf.tensor2d(dataset.map(d => this.ipToFeatures(d.ip)), [dataset.length, 8]);
-        const ys = tf.tensor2d(dataset.map(d => [d.label]), [dataset.length, 1]);
-        this.model = tf.sequential();
-        this.model.add(tf.layers.conv1d({
-            inputShape: [8, 1],
-            kernelSize: 3,
-            filters: 32,
-            activation: 'relu',
-            strides: 1,
-            padding: 'same'
-        }));
-        this.model.add(tf.layers.flatten());
-        this.model.add(tf.layers.dense({ units: 64, activation: 'relu' }));
-        this.model.add(tf.layers.dropout({ rate: 0.25 }));
-        this.model.add(tf.layers.dense({ units: 32, activation: 'relu' }));
-        this.model.add(tf.layers.dense({ units: 1, activation: 'sigmoid' }));
-        this.model.compile({
-            optimizer: 'adam',
-            loss: 'binaryCrossentropy',
-            metrics: ['accuracy']
+  // Train model
+  await model.fit(xs, ys, {
+    epochs: 50,
+    batchSize: 32,
+    validationSplit: 0.2,
+    callbacks: {
+      onEpochEnd: (epoch, logs) => {
+        self.postMessage({
+          type: 'trainingProgress',
+          epoch,
+          logs
         });
-        const reshapedXs = xs.reshape([xs.shape[0], xs.shape[1], 1]);
-        await this.model.fit(reshapedXs, ys, { epochs: 10, batchSize: 32, validationSplit: 0.1 });
-        this.trained = true;
-        console.log('Model trained successfully');
-        postMessage({ type: 'modelTrained', data: { success: true } });
-
-        } catch (e) {
-        console.error('Model training failed:', e);
-        postMessage({ type: 'error', data: { message: 'Model training failed', error: e } });
-        }
-    },
-
-    async predictIP(ip) {
-        if (!this.trained || !this.model) {
-          console.warn('Model not trained, returning false for IP:', ip);
-          return false; // Or any default value
-        }
-
-        if (!this.isValidIP(ip)) {
-            console.warn(`Invalid IP address for prediction: ${ip}`);
-            return false;
-        }
-        try {
-          const input = tf.tensor2d([this.ipToFeatures(ip)], [1, 8]);
-          const reshapedInput = input.reshape([1, 8, 1]); // Reshape for conv1d
-          const prediction = this.model.predict(reshapedInput).dataSync()[0];
-          console.log('Prediction for IP', ip, ':', prediction);
-          return prediction > ANOMALY_THRESHOLD;
-        } catch (e) {
-          console.error('Prediction failed for IP', ip, ':', e);
-          postMessage({ type: 'error', data: { message: 'Prediction failed', error: e } });
-          return false; // Return a default value in case of error
-        }
+      }
     }
-};
+  });
 
-onmessage = async (event) => {
-    const { type, data, ip } = event.data;
+  // Save model
+  await model.save('indexeddb://geo-track-model');
 
-    if (type === 'load') {
-        await Model.trainModel();  // Load and train on startup
-    } else if (type === 'predict') {
-      const isAnomaly = await Model.predictIP(ip);
-      postMessage({ type: 'predictionResult', data: { isAnomaly } });
-    }
-};
+  self.postMessage({ type: 'modelTrained' });
+}
+
+// Load saved model
+async function loadModel() {
+  try {
+    model = await tf.loadLayersModel('indexeddb://geo-track-model');
+    self.postMessage({ type: 'modelLoaded' });
+  } catch (error) {
+    self.postMessage({ type: 'modelLoadError', error: error.message });
+  }
+}
+
+// Make prediction
+async function predict(ip) {
+  if (!model) {
+    await loadModel();
+  }
+
+  const input = tf.tensor2d([preprocessIP(ip)]);
+  const prediction = await model.predict(input).data();
+  const isAnomaly = prediction[0] > ANOMALY_THRESHOLD;
+
+  self.postMessage({
+    type: 'prediction',
+    ip,
+    prediction: prediction[0],
+    isAnomaly
+  });
+}
+
+// Handle messages from main thread
+self.onmessage = async (event) => {
+  const { type, data } = event.data;
+
+  switch (type) {
+    case 'train':
+      await trainModel();
+      break;
+    case 'load':
+      await loadModel();
+      break;
+    case 'predict':
+      await predict(data.ip);
+      break;
+  }
+}; 
