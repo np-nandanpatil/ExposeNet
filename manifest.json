@@ -9,15 +9,18 @@
     "tabs"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "<all_urls>",
+    "http://ip-api.com/*",
+    "https://ipapi.co/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "browser_action": {},
   "web_accessible_resources": [
     {
-      "resources": ["tf.min.js"],
+      "resources": ["tf.min.js", "model-worker.js", "dataset.json"],
       "matches": ["<all_urls>"]
     }
   ],

@@ -67,7 +67,7 @@ async function processConnection(ipAddress, tabId, url) {
     // Check cache first
     if (geoDataCache.has(ipAddress)) {
       const cachedData = geoDataCache.get(ipAddress);
-      updateTabData(cachedData, tabId, url);
+      updateTabData(cachedData, tabId, url, ipAddress);
       return;
     }
 
@@ -103,14 +103,14 @@ async function processConnection(ipAddress, tabId, url) {
         });
       }
 
-      updateTabData(geoData, tabId, url);
+      updateTabData(geoData, tabId, url, ipAddress);
     }
   } catch (error) {
     console.error('Error processing connection:', error);
   }
 }
 
-function updateTabData(geoData, tabId, url) {
+function updateTabData(geoData, tabId, url, ipAddress) {
   const domain = new URL(url).hostname;
   const data = {
     ip: ipAddress,
