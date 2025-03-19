@@ -2,16 +2,23 @@
 <html>
 <head>
     <title>Geo-Track Monitor</title>
+    <script src="tf.min.js"></script>
     <style>
         body {
-            width: 400px;
+            width: 800px;
+            height: 600px;
             padding: 10px;
             font-family: Arial, sans-serif;
+            overflow-y: auto;
         }
         .tab-buttons {
             display: flex;
             margin-bottom: 10px;
             border-bottom: 1px solid #ccc;
+            position: sticky;
+            top: 0;
+            background: white;
+            z-index: 100;
         }
         .tab-button {
             padding: 10px 20px;
@@ -97,23 +104,93 @@
             color: #666;
             font-family: monospace;
         }
+        .ml-status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            background-color: #e8f5e9;
+        }
+        .prediction {
+            font-weight: bold;
+            color: #2e7d32;
+        }
+        .prediction.anomaly {
+            color: #c62828;
+        }
+        .stats-container {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin: 10px 0;
+        }
+        .stat-box {
+            padding: 15px;
+            border-radius: 4px;
+            background-color: #f5f5f5;
+        }
+        .chart-container {
+            margin: 20px 0;
+            height: 300px;
+        }
     </style>
 </head>
 <body>
     <div class="tab-buttons">
         <button class="tab-button active" data-tab="monitor">Monitor</button>
+        <button class="tab-button" data-tab="ml">ML Analysis</button>
         <button class="tab-button" data-tab="blockchain">Blockchain Log</button>
         <button class="tab-button" data-tab="settings">Settings</button>
     </div>
 
     <div id="monitor" class="tab-content active">
         <h2>Connection Monitor</h2>
+        <div class="stats-container">
+            <div class="stat-box">
+                <h3>Total Connections</h3>
+                <div id="totalConnections">0</div>
+            </div>
+            <div class="stat-box">
+                <h3>Anomalies Detected</h3>
+                <div id="totalAnomalies">0</div>
+            </div>
+        </div>
         <div id="geoDataList"></div>
         <button id="addToBlockchain" class="button" style="display: none;">Add to Blockchain</button>
     </div>
 
+    <div id="ml" class="tab-content">
+        <h2>Machine Learning Analysis</h2>
+        <div class="ml-status">
+            <h3>Model Status</h3>
+            <div id="modelStatus">Loading...</div>
+        </div>
+        <div class="stats-container">
+            <div class="stat-box">
+                <h3>Model Accuracy</h3>
+                <div id="modelAccuracy">-</div>
+            </div>
+            <div class="stat-box">
+                <h3>Predictions Made</h3>
+                <div id="predictionCount">0</div>
+            </div>
+        </div>
+        <div class="chart-container">
+            <canvas id="predictionChart"></canvas>
+        </div>
+    </div>
+
     <div id="blockchain" class="tab-content">
         <h2>Blockchain Log</h2>
+        <div class="stats-container">
+            <div class="stat-box">
+                <h3>Total Blocks</h3>
+                <div id="totalBlocks">0</div>
+            </div>
+            <div class="stat-box">
+                <h3>Last Block Time</h3>
+                <div id="lastBlockTime">-</div>
+            </div>
+        </div>
         <div id="blockchainList"></div>
     </div>
 
@@ -122,7 +199,7 @@
         <div class="settings-group">
             <label>
                 <input type="checkbox" id="anomalyDetection" checked>
-                Enable Anomaly Detection
+                Enable ML-based Anomaly Detection
             </label>
         </div>
         <div class="settings-group">
@@ -131,7 +208,25 @@
                 Use Multiple Geolocation APIs
             </label>
         </div>
+        <div class="settings-group">
+            <label>
+                <input type="checkbox" id="enableIPBlocking" checked>
+                Enable Automatic IP Blocking
+            </label>
+        </div>
+        <div class="settings-group">
+            <label>
+                <input type="checkbox" id="enableRealTimeAlerts" checked>
+                Enable Real-time Alerts
+            </label>
+        </div>
+        <div class="settings-group">
+            <label>Prediction Threshold</label>
+            <input type="range" id="predictionThreshold" min="0" max="100" value="75">
+            <span id="thresholdValue">75%</span>
+        </div>
         <button id="saveSettings" class="button">Save Settings</button>
+        <button id="retrainModel" class="button">Retrain Model</button>
     </div>
 
     <script src="popup.js"></script>
