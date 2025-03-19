@@ -1,0 +1,32 @@
+{
+     "manifest_version": 3,
+     "name": "Geo-Track Browser Extension",
+     "version": "1.0",
+     "description": "Tracks server geolocations per tab with ML anomaly detection and blockchain logging.",
+     "permissions": [
+       "webRequest",
+       "storage",
+       "tabs"
+     ],
+     "host_permissions": [
+       "<all_urls>",
+       "http://ip-api.com/*",
+       "https://ipapi.co/*"
+     ],
+     "background": {
+       "service_worker": "background.js",
+       "type": "module"
+     },
+     "action": {
+       "default_title": "Open Geo-Track Monitor"
+     },
+     "web_accessible_resources": [
+       {
+         "resources": ["dataset.json", "monitor.html"],
+         "matches": ["<all_urls>"]
+       }
+     ],
+     "content_security_policy": {
+       "extension_pages": "script-src 'self' https://cdn.jsdelivr.net; object-src 'self'"
+     }
+   }
