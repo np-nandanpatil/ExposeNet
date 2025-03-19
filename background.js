@@ -1,8 +1,5 @@
 // background.js
 
-// Initialize model worker
-const modelWorker = new Worker('model-worker.js');
-let geoDataCache = new Map();
 let settings = {
   anomalyDetection: true,
   useMultipleAPIs: true
@@ -64,13 +61,6 @@ chrome.webRequest.onCompleted.addListener(
 
 async function processConnection(ipAddress, tabId, url) {
   try {
-    // Check cache first
-    if (geoDataCache.has(ipAddress)) {
-      const cachedData = geoDataCache.get(ipAddress);
-      updateTabData(cachedData, tabId, url, ipAddress);
-      return;
-    }
-
     // Try multiple APIs if enabled
     let geoData = null;
     if (settings.useMultipleAPIs) {
@@ -92,21 +82,29 @@ async function processConnection(ipAddress, tabId, url) {
     }
 
     if (geoData && geoData.success) {
-      // Cache the result
-      geoDataCache.set(ipAddress, geoData);
-
       // Check for anomalies if enabled
       if (settings.anomalyDetection) {
-        modelWorker.postMessage({
-          type: 'predict',
-          data: { ip: ipAddress }
-        });
+        const isAnomaly = await checkForAnomaly(ipAddress);
+        geoData.anomaly = isAnomaly;
       }
 
       updateTabData(geoData, tabId, url, ipAddress);
     }
   } catch (error) {
     console.error('Error processing connection:', error);
+  }
+}
+
+async function checkForAnomaly(ip) {
+  // Simple rule-based anomaly detection
+  const allowedCountries = ["US", "CA", "GB", "DE", "FR", "IT", "ES"];
+  try {
+    const response = await fetch(GEO_APIS[0].url(ip));
+    const data = await response.json();
+    return !allowedCountries.includes(data.country);
+  } catch (error) {
+    console.error('Error checking anomaly:', error);
+    return false;
   }
 }
 
@@ -119,7 +117,7 @@ function updateTabData(geoData, tabId, url, ipAddress) {
     timestamp: Date.now(),
     tabId: tabId,
     domain: domain,
-    anomaly: false // Will be updated by model worker if anomaly detection is enabled
+    anomaly: geoData.anomaly || false
   };
 
   storeGeoData(data);
@@ -152,33 +150,15 @@ function storeGeoData(geoData) {
 }
 
 function sendGeoDataToPopup(geoData) {
-  chrome.windows.getAll({ populate: true }, (windows) => {
-    let popupWindow = windows.find(
-      (win) => win.tabs.some((tab) => tab.url && tab.url.includes("popup.html"))
-    );
-
-    if (popupWindow) {
-      chrome.tabs.query(
-        { windowId: popupWindow.id, url: "*://*/popup.html" },
-        (tabs) => {
-          if (tabs && tabs.length > 0) {
-            chrome.tabs.sendMessage(tabs[0].id, {
-              action: "geoDataUpdate",
-              data: geoData,
-            });
-          }
-        }
-      );
-    }
+  chrome.runtime.sendMessage({
+    action: "geoDataUpdate",
+    data: geoData,
   });
 }
 
 // Handle messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   switch (request.action) {
-    case 'trainModel':
-      modelWorker.postMessage({ type: 'train' });
-      break;
     case 'updateSettings':
       settings = request.settings;
       chrome.storage.local.set({ settings });
@@ -186,34 +166,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     case 'addToBlockchain':
       addBlockToBlockchain(request.data);
       break;
+    case 'GET_INITIAL_DATA':
+      sendInitialData();
+      break;
   }
 });
-
-// Handle messages from model worker
-modelWorker.onmessage = (event) => {
-  const { type, data } = event.data;
-
-  switch (type) {
-    case 'prediction':
-      if (data.isAnomaly) {
-        addBlockToBlockchain({
-          ip: data.ip,
-          prediction: data.prediction,
-          timestamp: Date.now()
-        });
-      }
-      break;
-    case 'trainingProgress':
-      sendModelStatusToPopup(`Training: Epoch ${data.epoch}`);
-      break;
-    case 'modelTrained':
-      sendModelStatusToPopup('Model trained successfully!');
-      break;
-    case 'modelLoadError':
-      sendModelStatusToPopup(`Error loading model: ${data.error}`);
-      break;
-  }
-};
 
 function addBlockToBlockchain(data) {
   chrome.storage.local.get({ blockchain: [] }, (result) => {
@@ -233,59 +190,56 @@ function addBlockToBlockchain(data) {
 }
 
 function sendBlockchainToPopup(blockchain) {
-  chrome.windows.getAll({ populate: true }, (windows) => {
-    let popupWindow = windows.find(
-      (win) => win.tabs.some((tab) => tab.url && tab.url.includes("popup.html"))
-    );
-
-    if (popupWindow) {
-      chrome.tabs.query(
-        { windowId: popupWindow.id, url: "*://*/popup.html" },
-        (tabs) => {
-          if (tabs && tabs.length > 0) {
-            chrome.tabs.sendMessage(tabs[0].id, {
-              action: "blockchainUpdate",
-              data: blockchain,
-            });
-          }
-        }
-      );
-    }
+  chrome.runtime.sendMessage({
+    action: "blockchainUpdate",
+    data: blockchain,
   });
 }
 
 function sendModelStatusToPopup(status) {
-  chrome.windows.getAll({ populate: true }, (windows) => {
-    let popupWindow = windows.find(
-      (win) => win.tabs.some((tab) => tab.url && tab.url.includes("popup.html"))
-    );
-
-    if (popupWindow) {
-      chrome.tabs.query(
-        { windowId: popupWindow.id, url: "*://*/popup.html" },
-        (tabs) => {
-          if (tabs && tabs.length > 0) {
-            chrome.tabs.sendMessage(tabs[0].id, {
-              action: "modelStatusUpdate",
-              data: status,
-            });
-          }
-        }
-      );
-    }
+  chrome.runtime.sendMessage({
+    action: "modelStatusUpdate",
+    data: status,
   });
 }
 
-chrome.action.onClicked.addListener((tab) => {
-  openPopupWindow();
+// Handle extension icon click
+chrome.browserAction.onClicked.addListener((tab) => {
+  openMonitorWindow();
 });
 
+// Handle keyboard shortcut
 chrome.commands.onCommand.addListener((command) => {
   if (command === "_execute_action") {
-    openPopupWindow();
+    openMonitorWindow();
   }
 });
 
-function openPopupWindow() {
-  chrome.windows.create({ url: "popup.html", type: "normal" });
+// Function to open the monitor window
+function openMonitorWindow() {
+  chrome.windows.create({
+    url: 'popup.html',
+    type: 'popup',
+    width: 800,
+    height: 600,
+    focused: true
+  });
+}
+
+// Function to send initial data to the window
+function sendInitialData() {
+  chrome.storage.local.get(['geoData', 'blockchain'], (result) => {
+    if (result.geoData) {
+      chrome.runtime.sendMessage({
+        action: "UPDATE_TAB_DATA",
+        data: result.geoData
+      });
+    }
+    if (result.blockchain) {
+      chrome.runtime.sendMessage({
+        action: "UPDATE_BLOCKCHAIN",
+        data: result.blockchain
+      });
+    }
+  });
 }

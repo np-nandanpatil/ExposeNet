@@ -6,21 +6,139 @@ let currentSettings = {
 };
 
 // Tab switching
-document.querySelectorAll(".tab-button").forEach((button) => {
-  button.addEventListener("click", () => {
-    // Update active tab button
-    document.querySelectorAll(".tab-button").forEach(btn => {
-      btn.classList.remove("active");
+document.addEventListener('DOMContentLoaded', function() {
+    // Tab switching
+    const tabButtons = document.querySelectorAll('.tab-button');
+    const tabContents = document.querySelectorAll('.tab-content');
+    
+    tabButtons.forEach(button => {
+        button.addEventListener('click', () => {
+            const tabId = button.getAttribute('data-tab');
+            
+            // Update active tab button
+            tabButtons.forEach(btn => btn.classList.remove('active'));
+            button.classList.add('active');
+            
+            // Update active tab content
+            tabContents.forEach(content => {
+                content.classList.remove('active');
+                if (content.id === tabId) {
+                    content.classList.add('active');
+                }
+            });
+        });
     });
-    button.classList.add("active");
 
-    // Show active tab content
-    const tab = button.dataset.tab;
-    document.querySelectorAll(".tab-content").forEach((content) => {
-      content.classList.remove("active");
+    // Initialize settings
+    chrome.storage.sync.get(['anomalyDetection', 'useMultipleAPIs'], function(result) {
+        document.getElementById('anomalyDetection').checked = result.anomalyDetection !== false;
+        document.getElementById('useMultipleAPIs').checked = result.useMultipleAPIs !== false;
     });
-    document.getElementById(tab).classList.add("active");
-  });
+
+    // Save settings
+    document.getElementById('saveSettings').addEventListener('click', function() {
+        const settings = {
+            anomalyDetection: document.getElementById('anomalyDetection').checked,
+            useMultipleAPIs: document.getElementById('useMultipleAPIs').checked
+        };
+        
+        chrome.storage.sync.set(settings, function() {
+            const status = document.createElement('div');
+            status.className = 'status success';
+            status.textContent = 'Settings saved successfully!';
+            document.getElementById('settings').appendChild(status);
+            setTimeout(() => status.remove(), 2000);
+        });
+    });
+
+    // Handle blockchain addition
+    document.getElementById('addToBlockchain').addEventListener('click', function() {
+        const selectedItem = document.querySelector('.list-item.selected');
+        if (!selectedItem) return;
+
+        const data = JSON.parse(selectedItem.dataset.geoData);
+        chrome.runtime.sendMessage({
+            type: 'ADD_TO_BLOCKCHAIN',
+            data: data
+        }, function(response) {
+            if (response.success) {
+                const status = document.createElement('div');
+                status.className = 'status success';
+                status.textContent = 'Added to blockchain successfully!';
+                document.getElementById('monitor').appendChild(status);
+                setTimeout(() => status.remove(), 2000);
+            } else {
+                const status = document.createElement('div');
+                status.className = 'status error';
+                status.textContent = 'Failed to add to blockchain: ' + response.error;
+                document.getElementById('monitor').appendChild(status);
+                setTimeout(() => status.remove(), 2000);
+            }
+        });
+    });
+
+    // Listen for updates from background script
+    chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
+        if (message.type === 'UPDATE_TAB_DATA') {
+            updateGeoDataList(message.data);
+        } else if (message.type === 'UPDATE_BLOCKCHAIN') {
+            updateBlockchainList(message.data);
+        }
+    });
+
+    // Update geo data list
+    function updateGeoDataList(data) {
+        const container = document.getElementById('geoDataList');
+        container.innerHTML = '';
+
+        data.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'list-item';
+            if (item.isAnomaly) {
+                div.classList.add('anomaly');
+            }
+            div.dataset.geoData = JSON.stringify(item);
+            
+            const timestamp = new Date(item.timestamp).toLocaleString();
+            div.innerHTML = `
+                <strong>${item.domain}</strong><br>
+                IP: ${item.ip}<br>
+                Location: ${item.country}, ${item.city}<br>
+                Time: ${timestamp}<br>
+                ${item.isAnomaly ? '<span style="color: red;">⚠️ Anomaly Detected</span>' : ''}
+            `;
+            
+            div.addEventListener('click', () => {
+                document.querySelectorAll('.list-item').forEach(el => el.classList.remove('selected'));
+                div.classList.add('selected');
+                document.getElementById('addToBlockchain').style.display = 'block';
+            });
+            
+            container.appendChild(div);
+        });
+    }
+
+    // Update blockchain list
+    function updateBlockchainList(data) {
+        const container = document.getElementById('blockchainList');
+        container.innerHTML = '';
+
+        data.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'blockchain-item';
+            div.innerHTML = `
+                <strong>${item.domain}</strong><br>
+                IP: ${item.ip}<br>
+                Location: ${item.country}, ${item.city}<br>
+                Time: ${new Date(item.timestamp).toLocaleString()}<br>
+                <span class="blockchain-hash">Hash: ${item.hash}</span>
+            `;
+            container.appendChild(div);
+        });
+    }
+
+    // Request initial data
+    chrome.runtime.sendMessage({ type: 'GET_INITIAL_DATA' });
 });
 
 // Load settings and initialize UI
@@ -54,25 +172,6 @@ async function initializeUI() {
 // Initialize UI when popup opens
 initializeUI();
 
-// Save settings
-document.getElementById('saveSettings').addEventListener('click', () => {
-  try {
-    currentSettings = {
-      anomalyDetection: document.getElementById('anomalyDetection').checked,
-      useMultipleAPIs: document.getElementById('useMultipleAPIs').checked
-    };
-    chrome.storage.local.set({ settings: currentSettings });
-    chrome.runtime.sendMessage({
-      action: 'updateSettings',
-      settings: currentSettings
-    });
-    showStatus('Settings saved successfully!', 'success');
-  } catch (error) {
-    console.error('Error saving settings:', error);
-    showStatus('Error saving settings', 'error');
-  }
-});
-
 // Train model button
 document.getElementById('trainModel').addEventListener('click', () => {
   try {
@@ -83,23 +182,6 @@ document.getElementById('trainModel').addEventListener('click', () => {
     console.error('Error training model:', error);
     showStatus('Error training model', 'error');
     document.getElementById('trainModel').disabled = false;
-  }
-});
-
-// Add to blockchain button
-document.getElementById('addToBlockchain').addEventListener('click', () => {
-  try {
-    const selectedData = document.querySelector('.list-item.selected');
-    if (selectedData) {
-      chrome.runtime.sendMessage({
-        action: 'addToBlockchain',
-        data: selectedData.dataset
-      });
-      showStatus('Added to blockchain!', 'success');
-    }
-  } catch (error) {
-    console.error('Error adding to blockchain:', error);
-    showStatus('Error adding to blockchain', 'error');
   }
 });
 
