@@ -86,8 +86,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
       case 'ANOMALY_ALERT':
         if (currentSettings.enableRealTimeAlerts) {
-          showStatus(`⚠️ Suspicious connection detected: ${message.data.ip}`, 'error');
+          showStatus(`⚠️ Suspicious connection detected: ${message.data.serverIP}`, 'error');
         }
+        sendResponse({ success: true });
+        break;
+      case 'UPDATE_STATS':
+        updateStatsDisplay(message.data);
         sendResponse({ success: true });
         break;
       default:
@@ -97,13 +101,182 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.error('Error handling message:', error);
     sendResponse({ success: false, error: error.message });
   }
-  return true; // Keep the message channel open for async response
+  return true;
 });
 
+function updateStatsDisplay(data) {
+  if (data.totalConnections !== undefined) {
+    stats.totalConnections = data.totalConnections;
+    document.getElementById('totalConnections').textContent = stats.totalConnections;
+  }
+  if (data.totalAnomalies !== undefined) {
+    stats.totalAnomalies = data.totalAnomalies;
+    document.getElementById('totalAnomalies').textContent = stats.totalAnomalies;
+  }
+  if (data.predictionCount !== undefined) {
+    stats.predictionCount = data.predictionCount;
+    document.getElementById('predictionCount').textContent = stats.predictionCount;
+  }
+  if (data.modelAccuracy !== undefined) {
+    stats.modelAccuracy = data.modelAccuracy;
+    document.getElementById('modelAccuracy').textContent = `${stats.modelAccuracy}%`;
+  }
+}
+
+function renderData(data) {
+  const container = document.getElementById("tabsContainer");
+  container.innerHTML = "";
+
+  if (!data || Object.keys(data).length === 0) {
+    container.innerHTML = "<p>No data captured yet.</p>";
+    return;
+  }
+
+  // Sort tabs by most recent activity
+  const sortedTabs = Object.entries(data).sort((a, b) => {
+    const aLatest = Math.max(...Object.values(a[1].results).map(r => r.timestamp));
+    const bLatest = Math.max(...Object.values(b[1].results).map(r => r.timestamp));
+    return bLatest - aLatest;
+  });
+
+  for (let [tabId, tabData] of sortedTabs) {
+    const tabDiv = document.createElement("div");
+    tabDiv.className = "tab-data";
+
+    const heading = document.createElement("h2");
+    heading.textContent = tabData.domain || "Unknown Domain";
+    tabDiv.appendChild(heading);
+
+    const list = document.createElement("ul");
+    // Sort results by timestamp
+    const sortedResults = Object.entries(tabData.results).sort((a, b) => b[1].timestamp - a[1].timestamp);
+    
+    for (let [ip, info] of sortedResults) {
+      const li = document.createElement("li");
+      if (info.isAnomaly) {
+        li.className = "anomaly";
+      }
+      
+      let text = `${info.city}, ${info.country} (IP: ${info.query})`;
+      if (info.reroutedTo) {
+        text += ` (Rerouted to: ${info.reroutedTo})`;
+      }
+      if (info.isAnomaly) {
+        text += ` - ANOMALY`;
+        if (info.riskFactors && info.riskFactors.length > 0) {
+          text += ` (${info.riskFactors.join(', ')})`;
+        }
+      }
+      li.textContent = text;
+      list.appendChild(li);
+    }
+    tabDiv.appendChild(list);
+    container.appendChild(tabDiv);
+  }
+}
+
+function updateAnomalyAnalysis(data) {
+  const container = document.getElementById('anomalyTabsContainer');
+  container.innerHTML = '';
+  
+  let totalAnomalyIPs = 0;
+  let anomalyTabCount = 0;
+  
+  // Group anomalies by tab
+  const anomalyTabData = {};
+  
+  // Process each tab's data
+  Object.entries(data).forEach(([tabId, tabData]) => {
+    const anomalyIPs = Object.entries(tabData.results)
+      .filter(([_, info]) => info.isAnomaly)
+      .map(([ip, info]) => ({
+        ip,
+        ...info
+      }));
+    
+    if (anomalyIPs.length > 0) {
+      anomalyTabData[tabId] = {
+        domain: tabData.domain,
+        anomalies: anomalyIPs
+      };
+      totalAnomalyIPs += anomalyIPs.length;
+      anomalyTabCount++;
+    }
+  });
+  
+  // Update stats
+  document.getElementById('anomalyTabs').textContent = anomalyTabCount;
+  document.getElementById('totalAnomalyIPs').textContent = totalAnomalyIPs;
+  
+  // Display anomaly tabs
+  Object.entries(anomalyTabData).forEach(([tabId, tabData]) => {
+    const tabDiv = document.createElement('div');
+    tabDiv.className = 'anomaly-tab';
+    
+    const header = document.createElement('div');
+    header.className = 'anomaly-tab-header';
+    
+    const title = document.createElement('div');
+    title.className = 'anomaly-tab-title';
+    title.textContent = tabData.domain || 'Unknown Domain';
+    
+    const count = document.createElement('div');
+    count.className = 'anomaly-tab-count';
+    count.textContent = `${tabData.anomalies.length} Anomalies`;
+    
+    header.appendChild(title);
+    header.appendChild(count);
+    
+    const ipList = document.createElement('ul');
+    ipList.className = 'anomaly-ip-list';
+    
+    tabData.anomalies.forEach(anomaly => {
+      const li = document.createElement('li');
+      li.className = 'anomaly-ip-item';
+      
+      const ipInfo = document.createElement('div');
+      ipInfo.className = 'anomaly-ip-info';
+      ipInfo.textContent = `${anomaly.ip} (${anomaly.city}, ${anomaly.country})`;
+      
+      const riskScore = document.createElement('div');
+      riskScore.className = 'anomaly-ip-risk';
+      riskScore.textContent = `${(anomaly.riskScore * 100).toFixed(1)}%`;
+      
+      li.appendChild(ipInfo);
+      li.appendChild(riskScore);
+      ipList.appendChild(li);
+    });
+    
+    tabDiv.appendChild(header);
+    tabDiv.appendChild(ipList);
+    container.appendChild(tabDiv);
+  });
+}
+
+function loadData() {
+  chrome.storage.local.get({ tabGeoData: {}, connectionCount: 0, totalAnomalies: 0 }, (result) => {
+    if (result.tabGeoData) {
+      renderData(result.tabGeoData);
+      updateAnomalyAnalysis(result.tabGeoData);
+    }
+    updateStatsDisplay({
+      totalConnections: result.connectionCount,
+      totalAnomalies: result.totalAnomalies
+       });
+     });
+}
+
+// Update the DOMContentLoaded event listener
 document.addEventListener('DOMContentLoaded', function() {
   initializeUI();
   setupEventListeners();
   initializeCharts();
+  
+  // Load initial data
+  loadData();
+  
+  // Set up periodic refresh
+  setInterval(loadData, 2000); // Refresh every 2 seconds
   
   // Request initial data with proper response handling
   chrome.runtime.sendMessage({ type: 'GET_INITIAL_DATA' }, (response) => {
@@ -217,14 +390,23 @@ function updateSettings() {
 }
 
 function updateStats(data) {
+  // Update basic stats
   stats.totalConnections++;
   if (data.anomaly) stats.totalAnomalies++;
   stats.predictionCount++;
 
   // Calculate accuracy based on multiple factors
-  const isHighRiskCountry = currentSettings.highRiskCountries.includes(data.country);
-  const hasSuspiciousTLD = currentSettings.suspiciousTLDs.some(tld => data.domain.toLowerCase().endsWith(tld));
-  const isPrivateIP = data.ip.startsWith('192.168.') || data.ip.startsWith('10.') || data.ip.startsWith('172.16.');
+  const isHighRiskCountry = data.serverLocation && 
+    currentSettings.highRiskCountries.includes(data.serverLocation.country);
+  
+  const hasSuspiciousTLD = data.domain && 
+    currentSettings.suspiciousTLDs.some(tld => data.domain.toLowerCase().endsWith(tld));
+  
+  const isPrivateIP = data.serverIP && (
+    data.serverIP.startsWith('192.168.') || 
+    data.serverIP.startsWith('10.') || 
+    data.serverIP.startsWith('172.16.')
+  );
   
   // A prediction is correct if:
   // 1. It's marked as anomaly when it's from a high-risk country or has suspicious TLD
@@ -245,10 +427,10 @@ function updateStats(data) {
   document.getElementById('modelAccuracy').textContent = `${stats.modelAccuracy}%`;
 
   // Update chart
-  if (predictionChart && data.anomalyScore !== undefined) {
+  if (predictionChart && data.riskScore !== undefined) {
     const timestamp = new Date(data.timestamp).toLocaleTimeString();
     predictionChart.data.labels.push(timestamp);
-    predictionChart.data.datasets[0].data.push(data.anomalyScore);
+    predictionChart.data.datasets[0].data.push(data.riskScore);
 
     // Keep last 20 points
     if (predictionChart.data.labels.length > 20) {
@@ -261,7 +443,16 @@ function updateStats(data) {
 }
 
 function updateGeoDataList(data) {
-  const list = document.getElementById('geoDataList');
+  // Create the list if it doesn't exist
+  let list = document.getElementById('geoDataList');
+  if (!list) {
+    list = document.createElement('ul');
+    list.id = 'geoDataList';
+    list.className = 'data-list';
+    const monitoringTab = document.getElementById('monitoring');
+    monitoringTab.appendChild(list);
+  }
+  
   const item = document.createElement('li');
   
   // Check if the tab is still active
@@ -280,9 +471,10 @@ function updateGeoDataList(data) {
     item.innerHTML = `
       <div class="data-domain">${data.domain}</div>
       <div class="data-location">
-        <div>Location: ${data.city}, ${data.country}</div>
-        <div>DNS IP: ${data.ip}</div>
-        <div>Server IP: ${data.serverIP}</div>
+        <div>${data.serverLocation.city}, ${data.serverLocation.country} (IP: ${data.serverIP})</div>
+        ${data.reroutedTo ? `<div>Rerouted to: ${data.reroutedTo}</div>` : ''}
+        ${data.riskFactors && data.riskFactors.length > 0 ? 
+          `<div>Risk Factors: ${data.riskFactors.join(', ')}</div>` : ''}
       </div>
     `;
     
@@ -315,9 +507,7 @@ function updateBlockchainList(data) {
     item.innerHTML = `
       <div class="data-domain">${block.data.domain}</div>
       <div class="data-location">
-        <div>Location: ${block.data.city}, ${block.data.country}</div>
-        <div>DNS IP: ${block.data.ip}</div>
-        <div>Server IP: ${block.data.serverIP}</div>
+        <div>${block.data.serverLocation.city}, ${block.data.serverLocation.country} (IP: ${block.data.serverIP})</div>
       </div>
       <div class="risk-info">
         <span class="risk-score">Risk Score: ${(block.data.riskScore * 100).toFixed(1)}%</span>
@@ -347,7 +537,7 @@ function showStatus(message, type) {
 // Initialize UI
 async function initializeUI() {
   try {
-    const result = await chrome.storage.local.get(['settings', 'geoData', 'blockchain']);
+    const result = await chrome.storage.local.get(['settings', 'geoData', 'blockchain', 'connectionCount']);
     
     // Load settings
     if (result.settings) {
@@ -358,6 +548,12 @@ async function initializeUI() {
       document.getElementById('enableIPBlocking').checked = currentSettings.enableIPBlocking;
       document.getElementById('predictionThreshold').value = Math.round(currentSettings.predictionThreshold * 100);
       document.getElementById('thresholdValue').textContent = `${Math.round(currentSettings.predictionThreshold * 100)}%`;
+    }
+
+    // Load connection count
+    if (result.connectionCount !== undefined) {
+      stats.totalConnections = result.connectionCount;
+      document.getElementById('totalConnections').textContent = stats.totalConnections;
     }
 
     // Load existing data

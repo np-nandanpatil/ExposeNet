@@ -85,6 +85,7 @@
             margin-bottom: 10px;
             border-radius: 5px;
             border-left: 4px solid #28a745;
+            transition: all 0.3s ease;
         }
         .data-item.suspicious {
             background: #fff3f3;
@@ -94,6 +95,7 @@
             font-weight: bold;
             font-size: 16px;
             margin-bottom: 5px;
+            color: #333;
         }
         .data-location {
             color: #666;
@@ -102,6 +104,7 @@
         }
         .data-location div {
             margin: 2px 0;
+            font-family: monospace;
         }
         .data-location div:first-child {
             color: #333;
@@ -164,6 +167,106 @@
             font-size: 14px;
             color: #666;
         }
+        #tabsContainer {
+            flex: 1;
+            overflow-y: auto;
+        }
+        .tab-data {
+            margin-bottom: 20px;
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .tab-data h2 {
+            margin: 0 0 10px 0;
+            color: #333;
+            font-size: 16px;
+        }
+        .tab-data ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .tab-data li {
+            padding: 8px;
+            border-bottom: 1px solid #eee;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        .tab-data li:last-child {
+            border-bottom: none;
+        }
+        .tab-data li.anomaly {
+            color: #dc3545;
+            background: #fff3f3;
+        }
+        .anomaly-analysis-section {
+            margin: 20px 0;
+            background: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .anomaly-stats {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .anomaly-tabs-container {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .anomaly-tab {
+            background: #f8f9fa;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+            border-left: 4px solid #dc3545;
+        }
+        .anomaly-tab-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .anomaly-tab-title {
+            font-weight: bold;
+            color: #333;
+        }
+        .anomaly-tab-count {
+            background: #dc3545;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+        }
+        .anomaly-ip-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .anomaly-ip-item {
+            padding: 8px;
+            border-bottom: 1px solid #eee;
+            font-family: monospace;
+            font-size: 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .anomaly-ip-item:last-child {
+            border-bottom: none;
+        }
+        .anomaly-ip-info {
+            flex: 1;
+        }
+        .anomaly-ip-risk {
+            margin-left: 10px;
+            color: #dc3545;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -193,7 +296,7 @@
                     <div class="stat-label">Model Accuracy</div>
                 </div>
             </div>
-            <ul id="geoDataList" class="data-list"></ul>
+            <div id="tabsContainer"></div>
         </div>
 
         <div id="ml" class="tab-content">
@@ -219,6 +322,22 @@
                 <div class="setting-item">
                     <label>Prediction Threshold: <span id="thresholdValue">75%</span></label>
                     <input type="range" id="predictionThreshold" min="0" max="100" value="75">
+                </div>
+            </div>
+            <div class="anomaly-analysis-section">
+                <h3>Anomaly Analysis</h3>
+                <div class="anomaly-stats">
+                    <div class="stat-box">
+                        <div class="stat-value" id="anomalyTabs">0</div>
+                        <div class="stat-label">Tabs with Anomalies</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value" id="totalAnomalyIPs">0</div>
+                        <div class="stat-label">Total Anomaly IPs</div>
+                    </div>
+                </div>
+                <div id="anomalyTabsContainer" class="anomaly-tabs-container">
+                    <!-- Anomaly tabs will be displayed here -->
                 </div>
             </div>
             <div class="chart-container">
