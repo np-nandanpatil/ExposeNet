@@ -78,19 +78,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.type) {
       case 'UPDATE_TAB_DATA':
         updateGeoDataList(message.data);
+        sendResponse({ success: true });
         break;
       case 'UPDATE_BLOCKCHAIN':
         updateBlockchainList(message.data);
+        sendResponse({ success: true });
         break;
       case 'ANOMALY_ALERT':
         if (currentSettings.enableRealTimeAlerts) {
           showStatus(`⚠️ Suspicious connection detected: ${message.data.ip}`, 'error');
         }
+        sendResponse({ success: true });
         break;
+      default:
+        sendResponse({ success: false, error: 'Unknown message type' });
     }
   } catch (error) {
     console.error('Error handling message:', error);
+    sendResponse({ success: false, error: error.message });
   }
+  return true; // Keep the message channel open for async response
 });
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -98,10 +105,14 @@ document.addEventListener('DOMContentLoaded', function() {
   setupEventListeners();
   initializeCharts();
   
-  // Request initial data
-  setTimeout(() => {
-    chrome.runtime.sendMessage({ type: 'GET_INITIAL_DATA' });
-  }, 100);
+  // Request initial data with proper response handling
+  chrome.runtime.sendMessage({ type: 'GET_INITIAL_DATA' }, (response) => {
+    if (chrome.runtime.lastError) {
+      console.error('Error getting initial data:', chrome.runtime.lastError);
+    } else if (response && !response.success) {
+      console.error('Failed to get initial data:', response.error);
+    }
+  });
 });
 
 function initializeCharts() {

@@ -5,11 +5,10 @@
   "description": "Tracks geolocation of servers and detects anomalies using ML.",
   "permissions": [
     "webRequest",
-    "webRequestBlocking",
     "storage",
     "tabs",
-    "windows",
-    "scripting"
+    "scripting",
+    "windows"
   ],
   "host_permissions": [
     "<all_urls>",

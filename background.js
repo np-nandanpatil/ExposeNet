@@ -79,7 +79,9 @@ async function processConnection(ip, domain) {
 
       // Create connection data
       const connectionData = {
+        id: `conn-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         ip: ip,
+        serverIP: geoData.query || ip, // Store the actual server IP
         domain: domain,
         country: geoData.countryCode,
         city: geoData.city,
@@ -232,6 +234,7 @@ async function sendInitialData() {
     }
   } catch (error) {
     console.error('Error sending initial data:', error);
+    throw error;
   }
 }
 
@@ -241,12 +244,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     case 'updateSettings':
       settings = { ...settings, ...request.settings };
       chrome.storage.local.set({ settings });
+      sendResponse({ success: true });
       break;
     case 'GET_INITIAL_DATA':
-      sendInitialData();
-      break;
+      sendInitialData().then(() => {
+        sendResponse({ success: true });
+      }).catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+      return true; // Keep the message channel open for async response
+    default:
+      sendResponse({ success: false, error: 'Unknown message type' });
   }
-  return true;
 });
 
 // Monitor web requests
@@ -278,6 +287,14 @@ function openMonitorWindow() {
     type: 'popup',
     width: 800,
     height: 600,
-    focused: true
+    focused: true,
+    left: 100,
+    top: 100
+  }, (window) => {
+    if (chrome.runtime.lastError) {
+      console.error('Error creating window:', chrome.runtime.lastError);
+    } else {
+      console.log('Window created successfully:', window);
+    }
   });
 }

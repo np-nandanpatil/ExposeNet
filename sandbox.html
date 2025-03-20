@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>ML Sandbox</title>
+    <script src="tensorflow.min.js"></script>
+    <script>
+        let model = null;
+
+        async function initializeModel() {
+            try {
+                await tf.setBackend('webgl');
+                await tf.ready();
+                
+                // Create model
+                model = tf.sequential({
+                    layers: [
+                        tf.layers.dense({
+                            inputShape: [8],
+                            units: 16,
+                            activation: 'relu'
+                        }),
+                        tf.layers.dense({
+                            units: 8,
+                            activation: 'relu'
+                        }),
+                        tf.layers.dense({
+                            units: 1,
+                            activation: 'sigmoid'
+                        })
+                    ]
+                });
+
+                // Compile model
+                model.compile({
+                    optimizer: tf.train.adam(0.001),
+                    loss: 'binaryCrossentropy',
+                    metrics: ['accuracy']
+                });
+
+                window.parent.postMessage({ type: 'MODEL_READY' }, '*');
+            } catch (error) {
+                window.parent.postMessage({ 
+                    type: 'MODEL_ERROR', 
+                    error: error.message 
+                }, '*');
+            }
+        }
+
+        async function trainModel(data) {
+            try {
+                const features = tf.tensor2d(data.features);
+                const labels = tf.tensor2d(data.labels.map(l => [l]));
+
+                const history = await model.fit(features, labels, {
+                    epochs: 10,
+                    batchSize: 32,
+                    validationSplit: 0.2,
+                    shuffle: true
+                });
+
+                features.dispose();
+                labels.dispose();
+
+                window.parent.postMessage({
+                    type: 'TRAINING_COMPLETE',
+                    accuracy: history.history.accuracy[history.history.accuracy.length - 1]
+                }, '*');
+            } catch (error) {
+                window.parent.postMessage({
+                    type: 'TRAINING_ERROR',
+                    error: error.message
+                }, '*');
+            }
+        }
+
+        async function predict(features) {
+            try {
+                const tensor = tf.tensor2d([features]);
+                const prediction = await model.predict(tensor).data();
+                tensor.dispose();
+
+                window.parent.postMessage({
+                    type: 'PREDICTION_COMPLETE',
+                    prediction: prediction[0]
+                }, '*');
+            } catch (error) {
+                window.parent.postMessage({
+                    type: 'PREDICTION_ERROR',
+                    error: error.message
+                }, '*');
+            }
+        }
+
+        // Listen for messages from parent
+        window.addEventListener('message', async (event) => {
+            const { type, data } = event.data;
+            switch (type) {
+                case 'INITIALIZE':
+                    await initializeModel();
+                    break;
+                case 'TRAIN':
+                    await trainModel(data);
+                    break;
+                case 'PREDICT':
+                    await predict(data);
+                    break;
+            }
+        });
+    </script>
+</head>
+<body>
+    <!-- This page runs in a sandbox environment -->
+</body>
+</html> 
