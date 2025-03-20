@@ -279,7 +279,11 @@ function updateGeoDataList(data) {
     
     item.innerHTML = `
       <div class="data-domain">${data.domain}</div>
-      <div class="data-location">${data.city}, ${data.country} (IP: ${data.ip})</div>
+      <div class="data-location">
+        <div>Location: ${data.city}, ${data.country}</div>
+        <div>DNS IP: ${data.ip}</div>
+        <div>Server IP: ${data.serverIP}</div>
+      </div>
     `;
     
     list.insertBefore(item, list.firstChild);
@@ -301,10 +305,24 @@ function updateBlockchainList(data) {
     lastBlockTime = new Date(block.timestamp).toLocaleString();
     
     const item = document.createElement('li');
-    item.className = 'blockchain-item';
+    item.className = `blockchain-item ${block.data.anomaly ? 'suspicious' : ''}`;
+    
+    // Format risk factors
+    const riskFactorsHtml = block.data.riskFactors.map(factor => 
+      `<span class="risk-factor">${factor}</span>`
+    ).join(', ');
+    
     item.innerHTML = `
       <div class="data-domain">${block.data.domain}</div>
-      <div class="data-location">${block.data.city}, ${block.data.country} (IP: ${block.data.ip})</div>
+      <div class="data-location">
+        <div>Location: ${block.data.city}, ${block.data.country}</div>
+        <div>DNS IP: ${block.data.ip}</div>
+        <div>Server IP: ${block.data.serverIP}</div>
+      </div>
+      <div class="risk-info">
+        <span class="risk-score">Risk Score: ${(block.data.riskScore * 100).toFixed(1)}%</span>
+        <span class="risk-factors">${riskFactorsHtml}</span>
+      </div>
       <div class="blockchain-hash">Block Hash: ${block.hash}</div>
       <div class="data-timestamp">Time: ${new Date(block.timestamp).toLocaleString()}</div>
     `;

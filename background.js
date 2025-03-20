@@ -108,10 +108,8 @@ async function processConnection(ip, domain) {
         });
       }
 
-      // Add to blockchain if anomaly detected
-      if (connectionData.anomaly) {
-        await addToBlockchain(connectionData);
-      }
+      // Add to blockchain for all connections
+      await addToBlockchain(connectionData);
     }
   } catch (error) {
     console.error('Error processing connection:', error);
@@ -156,9 +154,19 @@ async function addToBlockchain(data) {
       hash: '0'
     }];
     
+    // Create new block with more detailed data
     const block = {
       timestamp: Date.now(),
-      data: data,
+      data: {
+        type: 'connection',
+        ip: data.ip,
+        domain: data.domain,
+        country: data.country,
+        city: data.city,
+        riskScore: data.riskScore,
+        riskFactors: data.riskFactors,
+        anomaly: data.anomaly
+      },
       hash: calculateHash(chain[chain.length - 1].hash + JSON.stringify(data))
     };
     
@@ -169,6 +177,7 @@ async function addToBlockchain(data) {
       chain = chain.slice(-100);
     }
     
+    // Save to storage
     await chrome.storage.local.set({ blockchain: chain });
     
     // Notify UI
@@ -176,6 +185,8 @@ async function addToBlockchain(data) {
       type: 'UPDATE_BLOCKCHAIN',
       data: chain
     });
+
+    console.log('Block added to chain:', block);
   } catch (error) {
     console.error('Error adding to blockchain:', error);
   }
@@ -263,7 +274,18 @@ chrome.webRequest.onCompleted.addListener(
   (details) => {
     if (details.type === 'main_frame') {
       const url = new URL(details.url);
-      processConnection(details.ip, url.hostname);
+      
+      // Get the actual server IP from response headers
+      let serverIP = details.ip;
+      if (details.responseHeaders) {
+        const xForwardedFor = details.responseHeaders.find(h => h.name.toLowerCase() === 'x-forwarded-for');
+        if (xForwardedFor) {
+          // Get the first IP from the X-Forwarded-For header
+          serverIP = xForwardedFor.value.split(',')[0].trim();
+        }
+      }
+      
+      processConnection(serverIP, url.hostname);
     }
   },
   { urls: ["<all_urls>"] },
