@@ -285,9 +285,9 @@ document.addEventListener('DOMContentLoaded', function() {
     } else if (response && !response.success) {
       console.error('Failed to get initial data:', response.error);
     }
-  });
-});
-
+     });
+   });
+   
 function initializeCharts() {
   const ctx = document.getElementById('predictionChart').getContext('2d');
   predictionChart = new Chart(ctx, {

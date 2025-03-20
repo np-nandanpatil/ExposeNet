@@ -5,8 +5,8 @@
     <title>Geo-Track Monitor</title>
     <style>
         body {
-            width: 800px;
-            height: 600px;
+            width: 90vw;
+            height: 90vh;
             margin: 0;
             padding: 20px;
             font-family: Arial, sans-serif;
@@ -159,6 +159,19 @@
             margin-top: 5px;
             word-break: break-all;
         }
+        .reset-button {
+            background-color: #dc3545;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+        .reset-button:hover {
+            background-color: #c82333;
+        }
         .model-status {
             margin: 10px 0;
             padding: 10px;
@@ -297,7 +310,7 @@
                 </div>
             </div>
             <div id="tabsContainer"></div>
-        </div>
+    </div>
 
         <div id="ml" class="tab-content">
             <div class="model-status" id="modelStatus">Loading model...</div>
@@ -343,7 +356,7 @@
             <div class="chart-container">
                 <canvas id="predictionChart"></canvas>
             </div>
-        </div>
+    </div>
 
         <div id="blockchain" class="tab-content">
             <div class="stats-container">
@@ -354,6 +367,9 @@
                 <div class="stat-box">
                     <div class="stat-value" id="lastBlockTime">-</div>
                     <div class="stat-label">Last Block Time</div>
+                </div>
+                <div class="stat-box">
+                    <button id="resetBlockchain" class="reset-button">Reset Blockchain</button>
                 </div>
             </div>
             <ul id="blockchainList" class="data-list"></ul>
