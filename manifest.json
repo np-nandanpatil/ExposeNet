@@ -24,10 +24,13 @@
   "action": {},
   "web_accessible_resources": [
     {
-      "resources": ["tf.min.js", "model-worker.js", "dataset.json", "model.json", "weights.bin"],
+      "resources": ["chart.min.js", "model-worker.js", "dataset.json", "model.json", "weights.bin"],
       "matches": ["<all_urls>"]
     }
   ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
   "commands": {
     "_execute_action": {
       "suggested_key": {

@@ -1,11 +1,14 @@
 // popup.js
 
+let model = null;
 let currentSettings = {
+  enableRealTimeAlerts: true,
   anomalyDetection: true,
   useMultipleAPIs: true,
   enableIPBlocking: true,
-  enableRealTimeAlerts: true,
-  predictionThreshold: 0.75
+  predictionThreshold: 0.75,
+  highRiskCountries: ['KP', 'IR', 'SY', 'CU'],
+  suspiciousTLDs: ['.tk', '.ml', '.ga', '.cf']
 };
 
 let stats = {
@@ -18,277 +21,326 @@ let stats = {
 // Initialize Chart.js
 let predictionChart = null;
 
-document.addEventListener('DOMContentLoaded', function() {
-    initializeCharts();
-    initializeUI();
-    setupEventListeners();
-    loadInitialData();
-});
-
-function initializeCharts() {
-    const ctx = document.getElementById('predictionChart').getContext('2d');
-    predictionChart = new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: [{
-                label: 'Anomaly Predictions',
-                data: [],
-                borderColor: '#2196F3',
-                tension: 0.1
-            }]
-        },
-        options: {
-            responsive: true,
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    max: 1
-                }
-            }
-        }
-    });
-}
-
-function setupEventListeners() {
-    // Tab switching
-    const tabButtons = document.querySelectorAll('.tab-button');
-    const tabContents = document.querySelectorAll('.tab-content');
-    
-    tabButtons.forEach(button => {
-        button.addEventListener('click', () => {
-            const tabId = button.getAttribute('data-tab');
-            
-            tabButtons.forEach(btn => btn.classList.remove('active'));
-            button.classList.add('active');
-            
-            tabContents.forEach(content => {
-                content.classList.remove('active');
-                if (content.id === tabId) {
-                    content.classList.add('active');
-                }
-            });
-        });
-    });
-
-    // Settings
-    document.getElementById('saveSettings').addEventListener('click', saveSettings);
-    document.getElementById('retrainModel').addEventListener('click', retrainModel);
-    document.getElementById('predictionThreshold').addEventListener('input', updateThresholdValue);
-
-    // Blockchain
-    document.getElementById('addToBlockchain').addEventListener('click', addToBlockchain);
-}
-
-function updateThresholdValue() {
-    const value = document.getElementById('predictionThreshold').value;
-    document.getElementById('thresholdValue').textContent = `${value}%`;
-}
-
-async function saveSettings() {
-    const settings = {
-        anomalyDetection: document.getElementById('anomalyDetection').checked,
-        useMultipleAPIs: document.getElementById('useMultipleAPIs').checked,
-        enableIPBlocking: document.getElementById('enableIPBlocking').checked,
-        enableRealTimeAlerts: document.getElementById('enableRealTimeAlerts').checked,
-        predictionThreshold: document.getElementById('predictionThreshold').value / 100
-    };
-    
-    try {
-        await chrome.storage.local.set({ settings });
-        chrome.runtime.sendMessage({
-            type: 'updateSettings',
-            settings: settings
-        });
-        showStatus('Settings saved successfully!', 'success');
-    } catch (error) {
-        console.error('Error saving settings:', error);
-        showStatus('Error saving settings', 'error');
+// ML Model Management
+async function loadModel() {
+  try {
+    // Check if TensorFlow.js is available
+    if (typeof tf === 'undefined') {
+      console.log('TensorFlow.js not available, using rule-based detection only');
+      document.getElementById('modelStatus').textContent = 'Using rule-based detection';
+      return false;
     }
-}
 
-async function retrainModel() {
-    try {
-        document.getElementById('retrainModel').disabled = true;
-        const response = await chrome.runtime.sendMessage({ type: 'RETRAIN_MODEL' });
-        if (response.success) {
-            showStatus('Model retrained successfully!', 'success');
-        } else {
-            showStatus('Error retraining model', 'error');
-        }
-    } catch (error) {
-        console.error('Error retraining model:', error);
-        showStatus('Error retraining model', 'error');
-    } finally {
-        document.getElementById('retrainModel').disabled = false;
-    }
-}
-
-function updateStats(data) {
-    stats.totalConnections++;
-    if (data.anomaly) stats.totalAnomalies++;
-    if (data.predictionScore !== null) stats.predictionCount++;
-
-    document.getElementById('totalConnections').textContent = stats.totalConnections;
-    document.getElementById('totalAnomalies').textContent = stats.totalAnomalies;
-    document.getElementById('predictionCount').textContent = stats.predictionCount;
-
-    // Update chart
-    if (data.predictionScore !== null) {
-        const timestamp = new Date(data.timestamp).toLocaleTimeString();
-        predictionChart.data.labels.push(timestamp);
-        predictionChart.data.datasets[0].data.push(data.predictionScore);
-
-        // Keep last 20 points
-        if (predictionChart.data.labels.length > 20) {
-            predictionChart.data.labels.shift();
-            predictionChart.data.datasets[0].data.shift();
-        }
-
-        predictionChart.update();
-    }
-}
-
-function updateGeoDataList(data) {
-    const container = document.getElementById('geoDataList');
+    // Initialize TensorFlow
+    await tf.setBackend('webgl');
+    await tf.ready();
     
-    const div = document.createElement('div');
-    div.className = 'list-item';
-    if (data.anomaly) {
-        div.classList.add('anomaly');
-    }
-    div.dataset.geoData = JSON.stringify(data);
-    
-    const timestamp = new Date(data.timestamp).toLocaleString();
-    div.innerHTML = `
-        <strong>${data.domain}</strong><br>
-        IP: ${data.ip}<br>
-        Location: ${data.country}, ${data.city}<br>
-        Time: ${timestamp}<br>
-        ${data.predictionScore !== null ? `Anomaly Score: ${(data.predictionScore * 100).toFixed(2)}%<br>` : ''}
-        ${data.anomaly ? '<span style="color: red;">⚠️ Anomaly Detected</span>' : ''}
-    `;
-    
-    div.addEventListener('click', () => {
-        document.querySelectorAll('.list-item').forEach(el => el.classList.remove('selected'));
-        div.classList.add('selected');
-        document.getElementById('addToBlockchain').style.display = 'block';
-    });
-    
-    container.insertBefore(div, container.firstChild);
-    updateStats(data);
+    // Load the model
+    model = await tf.loadLayersModel(chrome.runtime.getURL('model.json'));
+    console.log('Model loaded successfully');
+    document.getElementById('modelStatus').textContent = 'Model loaded successfully';
+    return true;
+  } catch (error) {
+    console.error('Error loading model:', error);
+    document.getElementById('modelStatus').textContent = 'Using rule-based detection';
+    return false;
+  }
 }
 
-function updateBlockchainList(data) {
-    const container = document.getElementById('blockchainList');
-    container.innerHTML = '';
-
-    let totalBlocks = 0;
-    let lastBlockTime = '-';
-
-    data.forEach(block => {
-        if (block.data.type === 'genesis') return;
-        
-        totalBlocks++;
-        lastBlockTime = new Date(block.timestamp).toLocaleString();
-        
-        const div = document.createElement('div');
-        div.className = 'blockchain-item';
-        div.innerHTML = `
-            <strong>${block.data.domain}</strong><br>
-            IP: ${block.data.ip}<br>
-            Location: ${block.data.country}, ${block.data.city}<br>
-            Time: ${new Date(block.timestamp).toLocaleString()}<br>
-            ${block.data.predictionScore !== null ? `Anomaly Score: ${(block.data.predictionScore * 100).toFixed(2)}%<br>` : ''}
-            <span class="blockchain-hash">Hash: ${block.hash}</span>
-        `;
-        container.appendChild(div);
-    });
-
-    document.getElementById('totalBlocks').textContent = totalBlocks;
-    document.getElementById('lastBlockTime').textContent = lastBlockTime;
+function ipToFeatures(ip) {
+  // Convert IP to numerical features
+  const parts = ip.split(/[:.]/);
+  return parts.map(part => parseInt(part, 16) || parseInt(part, 10) || 0);
 }
 
-async function addToBlockchain() {
-    const selectedItem = document.querySelector('.list-item.selected');
-    if (!selectedItem) return;
-
-    try {
-        const data = JSON.parse(selectedItem.dataset.geoData);
-        const response = await chrome.runtime.sendMessage({
-            type: 'ADD_TO_BLOCKCHAIN',
-            data: data
-        });
-
-        if (response.success) {
-            showStatus('Added to blockchain successfully!', 'success');
-        } else {
-            showStatus('Failed to add to blockchain', 'error');
-        }
-    } catch (error) {
-        console.error('Error adding to blockchain:', error);
-        showStatus('Error adding to blockchain', 'error');
+async function predictIP(ip) {
+  if (!model) {
+    const loaded = await loadModel();
+    if (!loaded) {
+      return null;
     }
+  }
+  try {
+    const features = ipToFeatures(ip);
+    const tensor = tf.tensor2d([features]);
+    const prediction = await model.predict(tensor).data();
+    tensor.dispose();
+    return prediction[0];
+  } catch (error) {
+    console.error('Prediction error:', error);
+    return null;
+  }
 }
 
 // Message handling
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    try {
-        switch (message.type) {
-            case 'UPDATE_TAB_DATA':
-                updateGeoDataList(message.data);
-                break;
-            case 'UPDATE_BLOCKCHAIN':
-                updateBlockchainList(message.data);
-                break;
-            case 'ANOMALY_ALERT':
-                if (currentSettings.enableRealTimeAlerts) {
-                    showStatus(`⚠️ Anomaly detected: ${message.data.ip}`, 'error');
-                }
-                break;
+  try {
+    switch (message.type) {
+      case 'UPDATE_TAB_DATA':
+        updateGeoDataList(message.data);
+        break;
+      case 'UPDATE_BLOCKCHAIN':
+        updateBlockchainList(message.data);
+        break;
+      case 'ANOMALY_ALERT':
+        if (currentSettings.enableRealTimeAlerts) {
+          showStatus(`⚠️ Suspicious connection detected: ${message.data.ip}`, 'error');
         }
-    } catch (error) {
-        console.error('Error handling message:', error);
-        showStatus('Error updating data', 'error');
+        break;
     }
+  } catch (error) {
+    console.error('Error handling message:', error);
+  }
 });
 
-function showStatus(message, type) {
-    const status = document.createElement('div');
-    status.className = `status ${type}`;
-    status.textContent = message;
-    document.body.appendChild(status);
-    
-    setTimeout(() => {
-        status.remove();
-    }, 3000);
+document.addEventListener('DOMContentLoaded', function() {
+  initializeUI();
+  setupEventListeners();
+  initializeCharts();
+  
+  // Request initial data
+  setTimeout(() => {
+    chrome.runtime.sendMessage({ type: 'GET_INITIAL_DATA' });
+  }, 100);
+});
+
+function initializeCharts() {
+  const ctx = document.getElementById('predictionChart').getContext('2d');
+  predictionChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        label: 'Anomaly Scores',
+        data: [],
+        borderColor: '#007bff',
+        backgroundColor: 'rgba(0, 123, 255, 0.1)',
+        fill: true,
+        tension: 0.4
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'top',
+        }
+      },
+      scales: {
+        y: {
+          beginAtZero: true,
+          max: 1,
+          ticks: {
+            callback: function(value) {
+              return (value * 100) + '%';
+            }
+          }
+        },
+        x: {
+          grid: {
+            display: false
+          }
+        }
+      },
+      animation: {
+        duration: 750,
+        easing: 'easeInOutQuart'
+      }
+    }
+  });
 }
 
-// Load initial data
-function loadInitialData() {
-    chrome.runtime.sendMessage({ type: 'GET_INITIAL_DATA' });
+function setupEventListeners() {
+  // Tab switching
+  document.querySelectorAll('.tab-button').forEach(button => {
+    button.addEventListener('click', () => {
+      const tabId = button.getAttribute('data-tab');
+      
+      // Update active button
+      document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+      button.classList.add('active');
+      
+      // Update active content
+      document.querySelectorAll('.tab-content').forEach(content => {
+        content.classList.remove('active');
+        if (content.id === tabId) {
+          content.classList.add('active');
+        }
+      });
+
+      // Refresh chart if switching to ML tab
+      if (tabId === 'ml' && predictionChart) {
+        predictionChart.update();
+      }
+    });
+  });
+
+  // Settings changes
+  document.getElementById('enableRealTimeAlerts').addEventListener('change', updateSettings);
+  document.getElementById('anomalyDetection').addEventListener('change', updateSettings);
+  document.getElementById('useMultipleAPIs').addEventListener('change', updateSettings);
+  document.getElementById('enableIPBlocking').addEventListener('change', updateSettings);
+  document.getElementById('predictionThreshold').addEventListener('input', (e) => {
+    document.getElementById('thresholdValue').textContent = `${e.target.value}%`;
+    updateSettings();
+  });
+}
+
+function updateSettings() {
+  currentSettings = {
+    enableRealTimeAlerts: document.getElementById('enableRealTimeAlerts').checked,
+    anomalyDetection: document.getElementById('anomalyDetection').checked,
+    useMultipleAPIs: document.getElementById('useMultipleAPIs').checked,
+    enableIPBlocking: document.getElementById('enableIPBlocking').checked,
+    predictionThreshold: document.getElementById('predictionThreshold').value / 100,
+    highRiskCountries: currentSettings.highRiskCountries,
+    suspiciousTLDs: currentSettings.suspiciousTLDs
+  };
+  
+  chrome.storage.local.set({ settings: currentSettings });
+  chrome.runtime.sendMessage({
+    type: 'updateSettings',
+    settings: currentSettings
+  });
+}
+
+function updateStats(data) {
+  stats.totalConnections++;
+  if (data.anomaly) stats.totalAnomalies++;
+  stats.predictionCount++;
+
+  // Calculate accuracy based on multiple factors
+  const isHighRiskCountry = currentSettings.highRiskCountries.includes(data.country);
+  const hasSuspiciousTLD = currentSettings.suspiciousTLDs.some(tld => data.domain.toLowerCase().endsWith(tld));
+  const isPrivateIP = data.ip.startsWith('192.168.') || data.ip.startsWith('10.') || data.ip.startsWith('172.16.');
+  
+  // A prediction is correct if:
+  // 1. It's marked as anomaly when it's from a high-risk country or has suspicious TLD
+  // 2. It's not marked as anomaly when it's from a safe country and has no suspicious indicators
+  const shouldBeAnomalous = isHighRiskCountry || hasSuspiciousTLD || isPrivateIP;
+  const correctPrediction = (shouldBeAnomalous === data.anomaly);
+  
+  // Update running accuracy
+  const totalPredictions = stats.predictionCount;
+  const previousCorrect = (stats.modelAccuracy / 100) * (totalPredictions - 1);
+  const newCorrect = previousCorrect + (correctPrediction ? 1 : 0);
+  stats.modelAccuracy = Math.round((newCorrect / totalPredictions) * 100);
+
+  // Update UI
+  document.getElementById('totalConnections').textContent = stats.totalConnections;
+  document.getElementById('totalAnomalies').textContent = stats.totalAnomalies;
+  document.getElementById('predictionCount').textContent = stats.predictionCount;
+  document.getElementById('modelAccuracy').textContent = `${stats.modelAccuracy}%`;
+
+  // Update chart
+  if (predictionChart && data.anomalyScore !== undefined) {
+    const timestamp = new Date(data.timestamp).toLocaleTimeString();
+    predictionChart.data.labels.push(timestamp);
+    predictionChart.data.datasets[0].data.push(data.anomalyScore);
+
+    // Keep last 20 points
+    if (predictionChart.data.labels.length > 20) {
+      predictionChart.data.labels.shift();
+      predictionChart.data.datasets[0].data.shift();
+    }
+
+    predictionChart.update();
+  }
+}
+
+function updateGeoDataList(data) {
+  const list = document.getElementById('geoDataList');
+  const item = document.createElement('li');
+  
+  // Check if the tab is still active
+  chrome.tabs.query({}, function(tabs) {
+    const isActive = tabs.some(tab => {
+      try {
+        const tabDomain = new URL(tab.url).hostname;
+        return tabDomain === data.domain;
+      } catch (e) {
+        return false;
+      }
+    });
+    
+    item.className = `data-item ${data.anomaly ? 'suspicious' : ''}`;
+    
+    item.innerHTML = `
+      <div class="data-domain">${data.domain}</div>
+      <div class="data-location">${data.city}, ${data.country} (IP: ${data.ip})</div>
+    `;
+    
+    list.insertBefore(item, list.firstChild);
+    updateStats(data);
+  });
+}
+
+function updateBlockchainList(data) {
+  const list = document.getElementById('blockchainList');
+  list.innerHTML = '';
+  
+  let totalBlocks = 0;
+  let lastBlockTime = '-';
+  
+  data.forEach(block => {
+    if (block.data.type === 'genesis') return;
+    
+    totalBlocks++;
+    lastBlockTime = new Date(block.timestamp).toLocaleString();
+    
+    const item = document.createElement('li');
+    item.className = 'blockchain-item';
+    item.innerHTML = `
+      <div class="data-domain">${block.data.domain}</div>
+      <div class="data-location">${block.data.city}, ${block.data.country} (IP: ${block.data.ip})</div>
+      <div class="blockchain-hash">Block Hash: ${block.hash}</div>
+      <div class="data-timestamp">Time: ${new Date(block.timestamp).toLocaleString()}</div>
+    `;
+    list.appendChild(item);
+  });
+  
+  document.getElementById('totalBlocks').textContent = totalBlocks;
+  document.getElementById('lastBlockTime').textContent = lastBlockTime;
+}
+
+function showStatus(message, type) {
+  const status = document.createElement('div');
+  status.className = `status-message ${type}`;
+  status.textContent = message;
+  document.body.appendChild(status);
+  
+  setTimeout(() => {
+    status.remove();
+  }, 3000);
 }
 
 // Initialize UI
 async function initializeUI() {
-    try {
-        const result = await chrome.storage.local.get(['settings', 'geoData', 'blockchain']);
-        
-        // Load settings
-        if (result.settings) {
-            currentSettings = result.settings;
-            document.getElementById('anomalyDetection').checked = currentSettings.anomalyDetection;
-            document.getElementById('useMultipleAPIs').checked = currentSettings.useMultipleAPIs;
-            document.getElementById('enableIPBlocking').checked = currentSettings.enableIPBlocking;
-            document.getElementById('enableRealTimeAlerts').checked = currentSettings.enableRealTimeAlerts;
-            document.getElementById('predictionThreshold').value = Math.round(currentSettings.predictionThreshold * 100);
-            updateThresholdValue();
-        }
-
-        // Set initial active tab
-        document.getElementById("monitor").classList.add("active");
-    } catch (error) {
-        console.error('Error initializing UI:', error);
-        showStatus('Error loading data', 'error');
+  try {
+    const result = await chrome.storage.local.get(['settings', 'geoData', 'blockchain']);
+    
+    // Load settings
+    if (result.settings) {
+      currentSettings = { ...currentSettings, ...result.settings };
+      document.getElementById('enableRealTimeAlerts').checked = currentSettings.enableRealTimeAlerts;
+      document.getElementById('anomalyDetection').checked = currentSettings.anomalyDetection;
+      document.getElementById('useMultipleAPIs').checked = currentSettings.useMultipleAPIs;
+      document.getElementById('enableIPBlocking').checked = currentSettings.enableIPBlocking;
+      document.getElementById('predictionThreshold').value = Math.round(currentSettings.predictionThreshold * 100);
+      document.getElementById('thresholdValue').textContent = `${Math.round(currentSettings.predictionThreshold * 100)}%`;
     }
+
+    // Load existing data
+    if (result.geoData) {
+      result.geoData.forEach(data => updateGeoDataList(data));
+    }
+
+    // Load blockchain data
+    if (result.blockchain) {
+      updateBlockchainList(result.blockchain);
+    }
+  } catch (error) {
+    console.error('Error initializing UI:', error);
+  }
 }

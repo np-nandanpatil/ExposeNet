@@ -1,221 +1,114 @@
 // background.js
-let model = null;
 let settings = {
+  enableRealTimeAlerts: true,
   anomalyDetection: true,
   useMultipleAPIs: true,
   enableIPBlocking: true,
-  enableRealTimeAlerts: true,
-  predictionThreshold: 0.75
+  predictionThreshold: 0.75,
+  // List of known safe countries
+  safeCountries: ['US', 'GB', 'CA', 'AU', 'DE', 'FR', 'JP', 'SG', 'IN', 'NL'],
+  // List of high-risk countries
+  highRiskCountries: ['KP', 'IR', 'SY', 'CU'],
+  // List of suspicious TLD domains
+  suspiciousTLDs: ['.tk', '.ml', '.ga', '.cf']
 };
 
-// Load settings on startup
-chrome.storage.local.get(['settings'], (result) => {
+// Training data for the ML model
+let trainingData = {
+  features: [],  // Will store IP features
+  labels: [],    // Will store anomaly labels (0 or 1)
+  lastUpdate: Date.now()
+};
+
+// Load settings and training data on startup
+chrome.storage.local.get(['settings', 'trainingData'], (result) => {
   if (result.settings) {
-    settings = result.settings;
+    settings = { ...settings, ...result.settings };
+  }
+  if (result.trainingData) {
+    trainingData = result.trainingData;
   }
 });
 
-// Initialize blockchain
-class Blockchain {
-  constructor() {
-    this.chain = [];
-    this.initialize();
-  }
-
-  async initialize() {
-    const result = await chrome.storage.local.get(['blockchain']);
-    if (!result.blockchain || result.blockchain.length === 0) {
-      const genesisBlock = {
-        timestamp: Date.now(),
-        data: { type: 'genesis', message: 'Initial block' },
-        previousHash: '0',
-        hash: await this.calculateHash({ type: 'genesis', message: 'Initial block' }, '0')
-      };
-      this.chain = [genesisBlock];
-      await chrome.storage.local.set({ blockchain: this.chain });
-    } else {
-      this.chain = result.blockchain;
-    }
-  }
-
-  async addBlock(newData) {
-    const previousBlock = this.chain[this.chain.length - 1];
-    const newBlock = {
-      timestamp: Date.now(),
-      data: newData,
-      previousHash: previousBlock.hash,
-      hash: await this.calculateHash(newData, previousBlock.hash)
-    };
-    this.chain.push(newBlock);
-    await chrome.storage.local.set({ blockchain: this.chain });
-    return newBlock;
-  }
-
-  async calculateHash(data, previousHash) {
-    const str = JSON.stringify(data) + previousHash;
-    const encoder = new TextEncoder();
-    const buffer = encoder.encode(str);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-  }
-}
-
-const blockchain = new Blockchain();
-
-// ML Model Management
-async function loadModel() {
+// Process connection data
+async function processConnection(ip, domain) {
   try {
-    await loadTensorFlow();
-    model = await tf.loadLayersModel(chrome.runtime.getURL('model.json'));
-    console.log('Model loaded successfully');
-    return true;
-  } catch (error) {
-    console.error('Error loading model:', error);
-    return false;
-  }
-}
+    // Get geolocation data from ip-api
+    const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,city,isp,org,query,regionName`);
+    const geoData = await response.json();
+    
+    if (geoData.status === 'success') {
+      // Calculate risk score based on multiple factors
+      let riskScore = 0;
+      let riskFactors = [];
 
-function ipToFeatures(ip) {
-  // Convert IP to numerical features
-  const parts = ip.split(/[:.]/);
-  return parts.map(part => parseInt(part, 16) || parseInt(part, 10) || 0);
-}
-
-async function predictIP(ip) {
-  if (!model) {
-    await loadModel();
-  }
-  try {
-    const features = ipToFeatures(ip);
-    const tensor = tf.tensor2d([features]);
-    const prediction = await model.predict(tensor).data();
-    tensor.dispose();
-    return prediction[0];
-  } catch (error) {
-    console.error('Prediction error:', error);
-    return null;
-  }
-}
-
-// Geolocation APIs
-const GEO_APIS = [
-  {
-    url: (ip) => `http://ip-api.com/json/${ip}`,
-    parse: (data) => ({
-      city: data.city,
-      country: data.country,
-      success: data.status === 'success'
-    })
-  },
-  {
-    url: (ip) => `https://ipapi.co/${ip}/json/`,
-    parse: (data) => ({
-      city: data.city,
-      country: data.country_code,
-      success: true
-    })
-  }
-];
-
-async function fetchGeoData(ip) {
-  if (settings.useMultipleAPIs) {
-    for (const api of GEO_APIS) {
-      try {
-        const response = await fetch(api.url(ip));
-        const data = await response.json();
-        const parsed = api.parse(data);
-        if (parsed.success) return parsed;
-      } catch (error) {
-        console.error(`API error: ${error.message}`);
+      // 1. Country-based risk (40%)
+      if (settings.highRiskCountries.includes(geoData.countryCode)) {
+        riskScore += 0.4;
+        riskFactors.push('High-risk country');
+      } else if (!settings.safeCountries.includes(geoData.countryCode)) {
+        riskScore += 0.2;
+        riskFactors.push('Unknown country');
       }
-    }
-  }
-  // Fallback to first API
-  try {
-    const response = await fetch(GEO_APIS[0].url(ip));
-    const data = await response.json();
-    return GEO_APIS[0].parse(data);
-  } catch (error) {
-    console.error('Error fetching geo data:', error);
-    return null;
-  }
-}
 
-// Web request monitoring
-chrome.webRequest.onCompleted.addListener(
-  async (details) => {
-    if (details.type === "main_frame") {
-      const url = new URL(details.url);
-      const ipAddress = details.ip;
-      
-      if (ipAddress) {
-        const extractedIp = extractIpAddress(ipAddress);
-        if (extractedIp) {
-          await processConnection(extractedIp, details.tabId, details.url);
-        }
+      // 2. Domain analysis (30%)
+      if (settings.suspiciousTLDs.some(tld => domain.toLowerCase().endsWith(tld))) {
+        riskScore += 0.3;
+        riskFactors.push('Suspicious domain TLD');
       }
-    }
-  },
-  { urls: ["<all_urls>"] },
-  ["responseHeaders", "extraHeaders"]
-);
 
-function extractIpAddress(ip) {
-  if (!ip) return null;
-  
-  // IPv4 regex pattern
-  const ipv4Pattern = /^(\d{1,3}\.){3}\d{1,3}$/;
-  // IPv6 regex pattern
-  const ipv6Pattern = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^::$|^::1$|^([0-9a-fA-F]{1,4}:){1,7}:$|^([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}$|^([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}$|^([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}$|^([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}$|^([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}$|^[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})$|^:((:[0-9a-fA-F]{1,4}){1,7}|:)$/;
+      // 3. IP pattern analysis (30%)
+      const ipParts = ip.split('.');
+      const isPrivateIP = (
+        ip.startsWith('192.168.') || 
+        ip.startsWith('10.') || 
+        (ip.startsWith('172.') && parseInt(ipParts[1]) >= 16 && parseInt(ipParts[1]) <= 31)
+      );
 
-  // Check if it's a valid IPv4 or IPv6 address
-  if (ipv4Pattern.test(ip) || ipv6Pattern.test(ip)) {
-    return ip;
-  }
+      if (isPrivateIP) {
+        // Don't mark private IPs as suspicious, just note them
+        riskFactors.push('Private/Local IP');
+      }
 
-  // Handle IP addresses with port numbers
-  const ipWithPortMatch = ip.match(/^(.*?)(?::\d+)?$/);
-  if (ipWithPortMatch && ipWithPortMatch[1]) {
-    const ipWithoutPort = ipWithPortMatch[1];
-    if (ipv4Pattern.test(ipWithoutPort) || ipv6Pattern.test(ipWithoutPort)) {
-      return ipWithoutPort;
-    }
-  }
+      // Additional IP pattern checks
+      const hasUnusualPattern = ipParts.some(part => parseInt(part) > 250);
+      if (hasUnusualPattern) {
+        riskScore += 0.3;
+        riskFactors.push('Unusual IP pattern');
+      }
 
-  return null;
-}
-
-async function processConnection(ipAddress, tabId, url) {
-  try {
-    const geoData = await fetchGeoData(ipAddress);
-    let isAnomaly = false;
-    let predictionScore = null;
-
-    if (settings.anomalyDetection && model) {
-      predictionScore = await predictIP(ipAddress);
-      isAnomaly = predictionScore > settings.predictionThreshold;
-    }
-
-    if (geoData) {
-      const data = {
-        ip: ipAddress,
+      // Create connection data
+      const connectionData = {
+        ip: ip,
+        domain: domain,
+        country: geoData.countryCode,
         city: geoData.city,
-        country: geoData.country,
+        region: geoData.regionName,
+        isp: geoData.isp || 'Unknown',
+        org: geoData.org || 'Unknown',
         timestamp: Date.now(),
-        tabId: tabId,
-        domain: new URL(url).hostname,
-        anomaly: isAnomaly,
-        predictionScore: predictionScore
+        riskScore: riskScore,
+        riskFactors: riskFactors,
+        anomaly: riskScore >= settings.predictionThreshold
       };
 
-      await updateTabData(data);
+      // Update training data
+      updateTrainingData(connectionData);
 
-      if (isAnomaly && settings.enableRealTimeAlerts) {
+      // Store and update UI
+      await updateTabData(connectionData);
+
+      // Send alert if enabled and suspicious
+      if (connectionData.anomaly && settings.enableRealTimeAlerts) {
         chrome.runtime.sendMessage({
           type: 'ANOMALY_ALERT',
-          data: data
+          data: connectionData
         });
+      }
+
+      // Add to blockchain if anomaly detected
+      if (connectionData.anomaly) {
+        await addToBlockchain(connectionData);
       }
     }
   } catch (error) {
@@ -223,23 +116,122 @@ async function processConnection(ipAddress, tabId, url) {
   }
 }
 
+// Update training data
+function updateTrainingData(connectionData) {
+  // Convert IP to features
+  const features = ipToFeatures(connectionData.ip);
+  
+  // Add to training data
+  trainingData.features.push(features);
+  trainingData.labels.push(connectionData.anomaly ? 1 : 0);
+  
+  // Keep last 1000 data points
+  if (trainingData.features.length > 1000) {
+    trainingData.features.shift();
+    trainingData.labels.shift();
+  }
+  
+  // Update timestamp
+  trainingData.lastUpdate = Date.now();
+  
+  // Save to storage
+  chrome.storage.local.set({ trainingData });
+}
+
+// Convert IP to numerical features
+function ipToFeatures(ip) {
+  const parts = ip.split('.');
+  return parts.map(part => parseInt(part) / 255); // Normalize to 0-1
+}
+
+// Add to blockchain
+async function addToBlockchain(data) {
+  try {
+    const result = await chrome.storage.local.get(['blockchain']);
+    let chain = result.blockchain || [{
+      timestamp: Date.now(),
+      data: { type: 'genesis' },
+      hash: '0'
+    }];
+    
+    const block = {
+      timestamp: Date.now(),
+      data: data,
+      hash: calculateHash(chain[chain.length - 1].hash + JSON.stringify(data))
+    };
+    
+    chain.push(block);
+    
+    // Keep last 100 blocks
+    if (chain.length > 100) {
+      chain = chain.slice(-100);
+    }
+    
+    await chrome.storage.local.set({ blockchain: chain });
+    
+    // Notify UI
+    chrome.runtime.sendMessage({
+      type: 'UPDATE_BLOCKCHAIN',
+      data: chain
+    });
+  } catch (error) {
+    console.error('Error adding to blockchain:', error);
+  }
+}
+
+// Calculate hash
+function calculateHash(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return hash.toString(36);
+}
+
+// Update tab data
 async function updateTabData(data) {
   // Store in local storage
   chrome.storage.local.get({ geoData: [] }, (result) => {
     const storedGeoData = result.geoData;
     storedGeoData.push(data);
+    // Keep only last 100 connections
+    if (storedGeoData.length > 100) {
+      storedGeoData.shift();
+    }
     chrome.storage.local.set({ geoData: storedGeoData });
   });
 
   // Send to popup
-  chrome.runtime.sendMessage({
-    type: 'UPDATE_TAB_DATA',
-    data: data
-  });
+  try {
+    await chrome.runtime.sendMessage({
+      type: 'UPDATE_TAB_DATA',
+      data: data
+    });
+  } catch (error) {
+    console.log('Popup not ready, skipping message');
+  }
+}
 
-  // If anomaly detected, add to blockchain
-  if (data.anomaly) {
-    await blockchain.addBlock(data);
+// Send initial data to popup
+async function sendInitialData() {
+  try {
+    const result = await chrome.storage.local.get(['geoData']);
+    if (result.geoData) {
+      for (const data of result.geoData) {
+        try {
+          await chrome.runtime.sendMessage({
+            type: 'UPDATE_TAB_DATA',
+            data: data
+          });
+        } catch (error) {
+          console.log('Popup not ready, skipping message');
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error sending initial data:', error);
   }
 }
 
@@ -247,25 +239,27 @@ async function updateTabData(data) {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   switch (request.type) {
     case 'updateSettings':
-      settings = request.settings;
+      settings = { ...settings, ...request.settings };
       chrome.storage.local.set({ settings });
-      break;
-    case 'ADD_TO_BLOCKCHAIN':
-      blockchain.addBlock(request.data).then(() => {
-        sendResponse({success: true});
-      });
       break;
     case 'GET_INITIAL_DATA':
       sendInitialData();
       break;
-    case 'RETRAIN_MODEL':
-      retrainModel().then(success => {
-        sendResponse({success});
-      });
-      break;
   }
   return true;
 });
+
+// Monitor web requests
+chrome.webRequest.onCompleted.addListener(
+  (details) => {
+    if (details.type === 'main_frame') {
+      const url = new URL(details.url);
+      processConnection(details.ip, url.hostname);
+    }
+  },
+  { urls: ["<all_urls>"] },
+  ["responseHeaders"]
+);
 
 // Window management
 chrome.action.onClicked.addListener((tab) => {
@@ -287,11 +281,3 @@ function openMonitorWindow() {
     focused: true
   });
 }
-
-// Initial setup
-async function initialize() {
-  await loadModel();
-  await blockchain.initialize();
-}
-
-initialize();
