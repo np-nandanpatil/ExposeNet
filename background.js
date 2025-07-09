@@ -15,34 +15,25 @@ let settings = {
 
 // Training data for the ML model
 let trainingData = {
-  features: [],  // Will store IP features
-  labels: [],    // Will store anomaly labels (0 or 1)
+  features: [],  // to store IP features
+  labels: [],    // to store anomaly labels (0 or 1)
   lastUpdate: Date.now()
 };
 
-// Add this at the top of the file after the settings object
 let domainConnections = {};
 
-// Load settings and training data on startup
 chrome.storage.local.get(['settings', 'trainingData'], (result) => {
-  if (result.settings) {
-    settings = { ...settings, ...result.settings };
-  }
-  if (result.trainingData) {
-    trainingData = result.trainingData;
-  }
+  if (result.settings) { settings = { ...settings, ...result.settings }; }
+  if (result.trainingData) { trainingData = result.trainingData; }
 });
 
-// Process connection data
 async function processConnection(ip, domain, tabId, reroutedTo = null) {
   try {
-    // Skip processing if IP or domain is invalid
     if (!ip || !domain || ip === 'undefined' || domain === 'undefined') {
       console.log('Skipping invalid connection:', { ip, domain, tabId });
       return;
     }
 
-    // Initialize domain tracking if not exists
     if (!domainConnections[domain]) {
       domainConnections[domain] = {
         expectedIPs: new Set(),
@@ -52,11 +43,9 @@ async function processConnection(ip, domain, tabId, reroutedTo = null) {
       };
     }
 
-    // Update domain connection data
     const domainData = domainConnections[domain];
     domainData.connectionCount++;
-    
-    // Reset counters if last check was more than 5 minutes ago
+
     if (Date.now() - domainData.lastCheck > 300000) {
       domainData.expectedIPs.clear();
       domainData.suspiciousIPs.clear();
@@ -69,14 +58,11 @@ async function processConnection(ip, domain, tabId, reroutedTo = null) {
     let riskScore = 0;
     let riskFactors = [];
 
-    // Check if this is a first-party domain connection
-    const isFirstParty = ip.includes(domain.split('.')[0]) || 
-                        domain.includes(ip.split('.')[0]);
+    const isFirstParty = ip.includes(domain.split('.')[0]) || domain.includes(ip.split('.')[0]);
 
     if (isFirstParty) {
       domainData.expectedIPs.add(ip);
     } else {
-      // Check for suspicious patterns
       if (domainData.connectionCount > 10 && !domainData.expectedIPs.has(ip)) {
         domainData.suspiciousIPs.add(ip);
         isAnomaly = true;
@@ -84,14 +70,12 @@ async function processConnection(ip, domain, tabId, reroutedTo = null) {
         riskFactors.push('Multiple unexpected IPs');
       }
 
-      // Check for high connection rate
       if (domainData.suspiciousIPs.size > 5) {
         riskScore = 0.9;
         riskFactors.push('High number of suspicious connections');
       }
     }
 
-    // Create connection data
     const connectionData = {
       id: `conn-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       domain: domain,
@@ -110,34 +94,27 @@ async function processConnection(ip, domain, tabId, reroutedTo = null) {
       anomaly: isAnomaly
     };
 
-    // If this is an anomaly and blocking is enabled, block the IP
     if (isAnomaly && settings.enableIPBlocking) {
       console.log(`Blocking suspicious IP ${ip} for domain ${domain}`);
-      // You would implement IP blocking here
+      // I want to implemetnt Ip blocking here
     }
 
-    // Update connection count
+    // updating connection count
     chrome.storage.local.get(['connectionCount'], (result) => {
       const count = (result.connectionCount || 0) + 1;
       chrome.storage.local.set({ connectionCount: count });
       chrome.runtime.sendMessage({
         type: 'UPDATE_STATS',
-        data: { 
+        data: {
           totalConnections: count,
           totalAnomalies: connectionData.anomaly ? (result.totalAnomalies || 0) + 1 : (result.totalAnomalies || 0)
         }
       });
     });
 
-    // Store tab-specific data
     chrome.storage.local.get({ tabGeoData: {} }, (result) => {
       const tabGeoData = result.tabGeoData;
-      if (!tabGeoData[tabId]) {
-        tabGeoData[tabId] = {
-          domain: domain,
-          results: {}
-        };
-      }
+      if (!tabGeoData[tabId]) { tabGeoData[tabId] = { domain: domain, results: {} }; }
       tabGeoData[tabId].results[ip] = {
         city: isFirstParty ? 'Expected Connection' : 'Unknown Connection',
         country: isFirstParty ? domain : 'Unknown',
@@ -151,58 +128,39 @@ async function processConnection(ip, domain, tabId, reroutedTo = null) {
       chrome.storage.local.set({ tabGeoData });
     });
 
-    // Update training data
+    // updating training data
     updateTrainingData(connectionData);
-
-    // Store and update UI
     await updateTabData(connectionData);
-
-    // Send alert if enabled and suspicious
     if (connectionData.anomaly && settings.enableRealTimeAlerts) {
       chrome.runtime.sendMessage({
         type: 'ANOMALY_ALERT',
         data: connectionData
       });
     }
-
-    // Add to blockchain for all connections
     await addToBlockchain(connectionData);
   } catch (error) {
     console.error('Error processing connection:', error);
-    // Handle error case
   }
 }
-
-// Update training data
 function updateTrainingData(connectionData) {
-  // Convert IP to features
   const features = ipToFeatures(connectionData.serverIP);
-  
-  // Add to training data
+
   trainingData.features.push(features);
   trainingData.labels.push(connectionData.anomaly ? 1 : 0);
-  
-  // Keep last 1000 data points
   if (trainingData.features.length > 1000) {
     trainingData.features.shift();
     trainingData.labels.shift();
   }
-  
-  // Update timestamp
   trainingData.lastUpdate = Date.now();
-  
-  // Save to storage
   chrome.storage.local.set({ trainingData });
 }
 
-// Convert IP to numerical features
 function ipToFeatures(ip) {
-  if (!ip) return [0, 0, 0, 0, 0, 0, 0, 0]; // Return default features if IP is undefined
+  if (!ip) return [0, 0, 0, 0, 0, 0, 0, 0];
   const parts = ip.split(/[:.]/);
   return parts.map(part => parseInt(part, 16) || parseInt(part, 10) || 0);
 }
 
-// Add to blockchain
 async function addToBlockchain(data) {
   try {
     const result = await chrome.storage.local.get(['blockchain']);
@@ -211,8 +169,7 @@ async function addToBlockchain(data) {
       data: { type: 'genesis' },
       hash: '0'
     }];
-    
-    // Create new block with more detailed data
+
     const block = {
       timestamp: Date.now(),
       data: {
@@ -226,30 +183,21 @@ async function addToBlockchain(data) {
       },
       hash: calculateHash(chain[chain.length - 1].hash + JSON.stringify(data))
     };
-    
     chain.push(block);
-    
-    // Keep last 100 blocks
     if (chain.length > 100) {
       chain = chain.slice(-100);
     }
-    
-    // Save to storage
     await chrome.storage.local.set({ blockchain: chain });
-    
-    // Notify UI
     chrome.runtime.sendMessage({
       type: 'UPDATE_BLOCKCHAIN',
       data: chain
     });
-
     console.log('Block added to chain:', block);
   } catch (error) {
     console.error('Error adding to blockchain:', error);
   }
 }
 
-// Calculate hash
 function calculateHash(str) {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
@@ -260,20 +208,15 @@ function calculateHash(str) {
   return hash.toString(36);
 }
 
-// Update tab data
 async function updateTabData(data) {
-  // Store in local storage
   chrome.storage.local.get({ geoData: [] }, (result) => {
     const storedGeoData = result.geoData;
     storedGeoData.push(data);
-    // Keep only last 100 connections
     if (storedGeoData.length > 100) {
       storedGeoData.shift();
     }
     chrome.storage.local.set({ geoData: storedGeoData });
   });
-
-  // Send to popup
   try {
     await chrome.runtime.sendMessage({
       type: 'UPDATE_TAB_DATA',
@@ -284,7 +227,6 @@ async function updateTabData(data) {
   }
 }
 
-// Send initial data to popup
 async function sendInitialData() {
   try {
     const result = await chrome.storage.local.get(['geoData']);
@@ -305,7 +247,6 @@ async function sendInitialData() {
     throw error;
   }
 }
-
 // Message handling
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   switch (request.type) {
@@ -320,57 +261,43 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }).catch(error => {
         sendResponse({ success: false, error: error.message });
       });
-      return true; // Keep the message channel open for async response
+      return true;
     default:
       sendResponse({ success: false, error: 'Unknown message type' });
   }
 });
-
 // Monitor web requests
 chrome.webRequest.onCompleted.addListener(
   (details) => {
-    // Process all requests, not just main_frame and sub_frame
     try {
       const url = new URL(details.url);
-      
-      // Get the actual server IP from response headers
       let serverIP = details.ip;
       let reroutedTo = null;
-      
+
       if (details.responseHeaders) {
-        // Check for X-Forwarded-For header
         const xForwardedFor = details.responseHeaders.find(h => h.name.toLowerCase() === 'x-forwarded-for');
         if (xForwardedFor) {
-          // Get the first IP from the X-Forwarded-For header
           serverIP = xForwardedFor.value.split(',')[0].trim();
         }
-        
-        // Check for other headers that might contain the actual server IP
+
         const cfConnectingIp = details.responseHeaders.find(h => h.name.toLowerCase() === 'cf-connecting-ip');
         if (cfConnectingIp) {
           reroutedTo = serverIP;
           serverIP = cfConnectingIp.value;
         }
       }
-
-      // Improved domain extraction
       let mainDomain = url.hostname;
-      // Handle cases like mail.google.com -> google.com
       const domainParts = url.hostname.split('.');
       if (domainParts.length > 2) {
-        // Check for special cases like co.uk, com.au, etc.
-        if (domainParts[domainParts.length - 2] === 'co' || 
-            domainParts[domainParts.length - 2] === 'com' || 
-            domainParts[domainParts.length - 2] === 'org') {
+        if (domainParts[domainParts.length - 2] === 'co' ||
+          domainParts[domainParts.length - 2] === 'com' ||
+          domainParts[domainParts.length - 2] === 'org') {
           mainDomain = domainParts.slice(-3).join('.');
         } else {
           mainDomain = domainParts.slice(-2).join('.');
         }
       }
-
       console.log(`Processing request for domain: ${mainDomain}, IP: ${serverIP}`);
-      
-      // Store the connection data with both original and actual IPs
       processConnection(serverIP, mainDomain, details.tabId, reroutedTo);
     } catch (error) {
       console.error('Error processing web request:', error);
@@ -380,27 +307,22 @@ chrome.webRequest.onCompleted.addListener(
   ["responseHeaders"]
 );
 
-// Add tab update listener to handle tab changes
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && tab.url) {
     try {
       const url = new URL(tab.url);
-      // Use the same improved domain extraction logic
       let mainDomain = url.hostname;
       const domainParts = url.hostname.split('.');
       if (domainParts.length > 2) {
-        if (domainParts[domainParts.length - 2] === 'co' || 
-            domainParts[domainParts.length - 2] === 'com' || 
-            domainParts[domainParts.length - 2] === 'org') {
+        if (domainParts[domainParts.length - 2] === 'co' ||
+          domainParts[domainParts.length - 2] === 'com' ||
+          domainParts[domainParts.length - 2] === 'org') {
           mainDomain = domainParts.slice(-3).join('.');
         } else {
           mainDomain = domainParts.slice(-2).join('.');
         }
       }
-
       console.log(`Tab updated for domain: ${mainDomain}`);
-      
-      // Process the connection for the updated tab
       processConnection(tab.url, mainDomain, tabId);
     } catch (error) {
       console.error('Error processing tab update:', error);
@@ -408,7 +330,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 });
 
-// Add tab removal listener to clean up data
 chrome.tabs.onRemoved.addListener((tabId) => {
   chrome.storage.local.get({ tabGeoData: {} }, (result) => {
     const tabGeoData = result.tabGeoData;
@@ -418,18 +339,14 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     }
   });
 });
-
-// Window management
 chrome.action.onClicked.addListener((tab) => {
   openMonitorWindow();
 });
-
 chrome.commands.onCommand.addListener((command) => {
   if (command === "_execute_action") {
     openMonitorWindow();
   }
 });
-
 function openMonitorWindow() {
   chrome.windows.create({
     url: 'popup.html',
